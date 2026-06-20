@@ -1,26 +1,21 @@
 from __future__ import annotations
 
-from incident_agent.contracts import Alert, Diagnosis
+from incident_agent.contracts import Diagnosis, Evidence, IncidentState
 
 
-def diagnose(alert: Alert, logs: list[str]) -> Diagnosis:
+def diagnose(state: IncidentState) -> dict[str, object]:
     """
-    Diagnose an incident from alert + logs.
+    Diagnose node (state-in, partial-state-out).
 
     This is intentionally hardcoded for now to prove the interface
     before LangGraph orchestration is introduced.
     """
-    _ = alert.model_dump()
-    _ = logs
-    return Diagnosis(
+    _ = state.alert.model_dump()
+    _ = state.observations.logs
+    diagnosis = Diagnosis(
         summary="Invalid image tag",
         confidence=0.8,
-        evidence=[
-            {
-                "schema_version": "1",
-                "source": "logs",
-                "text": "Synthetic placeholder evidence (hardcoded)",
-            }
-        ],
+        evidence=[Evidence(source="logs", text="Deterministic baseline evidence (hardcoded)")],
     )
+    return {"diagnosis": diagnosis}
 

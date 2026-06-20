@@ -1,0 +1,270 @@
+{
+  "schema_version": "1",
+  "source": {
+    "notes": "Realistic Kubernetes-shaped fixtures (events/log lines). Replace or extend with captured logs from real clusters.",
+    "examples": [
+      "kubectl describe pod ... (Events section)",
+      "kubectl logs --previous ..."
+    ]
+  },
+  "fixtures": {
+    "invalid_image_wrong_tag": [
+      {
+        "events": [
+          "Normal   Scheduled  default-scheduler  Successfully assigned {namespace}/{pod_name} to {node_name}",
+          "Normal   Pulling    kubelet            Pulling image \"{image}\"",
+          "Warning  Failed     kubelet            Failed to pull image \"{image}\": rpc error: code = NotFound desc = failed to resolve reference \"{image}\": manifest unknown: manifest unknown",
+          "Warning  Failed     kubelet            Error: ErrImagePull",
+          "Normal   BackOff    kubelet            Back-off pulling image \"{image}\"",
+          "Warning  Failed     kubelet            Error: ImagePullBackOff"
+        ],
+        "logs": [
+          "containerd: failed to pull and unpack image \"{image}\": not found",
+          "FATAL: container start aborted (image pull error)"
+        ],
+        "root_cause": "Invalid image tag: {image}",
+        "expected_fix": {
+          "summary": "Fix image tag (use an existing tag) and redeploy",
+          "kind": "patch_image_tag",
+          "kubectl_hint": "kubectl -n {namespace} set image {workload_kind_lower}/{workload_name} *=<valid-image>"
+        }
+      }
+    ],
+    "invalid_image_deleted_image": [
+      {
+        "events": [
+          "Normal   Scheduled  default-scheduler  Successfully assigned {namespace}/{pod_name} to {node_name}",
+          "Normal   Pulling    kubelet            Pulling image \"{image}\"",
+          "Warning  Failed     kubelet            Failed to pull image \"{image}\": rpc error: code = NotFound desc = failed to pull and unpack image \"{image}\": not found",
+          "Warning  Failed     kubelet            Error: ErrImagePull",
+          "Normal   BackOff    kubelet            Back-off pulling image \"{image}\"",
+          "Warning  Failed     kubelet            Error: ImagePullBackOff"
+        ],
+        "logs": [
+          "Error response from daemon: pull access denied, repository does not exist or may require authorization",
+          "FATAL: image not found (repo/tag)"
+        ],
+        "root_cause": "Image not found (deleted or wrong repository): {image}",
+        "expected_fix": {
+          "summary": "Update image reference to an existing repository/tag",
+          "kind": "patch_image_tag",
+          "kubectl_hint": "kubectl -n {namespace} set image {workload_kind_lower}/{workload_name} *=<valid-image>"
+        }
+      }
+    ],
+    "invalid_image_private_registry_auth": [
+      {
+        "events": [
+          "Normal   Scheduled  default-scheduler  Successfully assigned {namespace}/{pod_name} to {node_name}",
+          "Normal   Pulling    kubelet            Pulling image \"{image}\"",
+          "Warning  Failed     kubelet            Failed to pull image \"{image}\": rpc error: code = Unknown desc = Error response from daemon: unauthorized: authentication required",
+          "Warning  Failed     kubelet            Error: ErrImagePull",
+          "Normal   BackOff    kubelet            Back-off pulling image \"{image}\"",
+          "Warning  Failed     kubelet            Error: ImagePullBackOff"
+        ],
+        "logs": [
+          "unauthorized: authentication required",
+          "FATAL: registry auth missing (imagePullSecrets not configured)"
+        ],
+        "root_cause": "Private registry authentication missing/invalid (imagePullSecret not configured)",
+        "expected_fix": {
+          "summary": "Create/update imagePullSecret and attach it to the ServiceAccount / Pod spec",
+          "kind": "create_image_pull_secret",
+          "kubectl_hint": "kubectl -n {namespace} create secret docker-registry regcred --docker-server=<registry> --docker-username=<user> --docker-password=<pass>"
+        }
+      }
+    ],
+    "missing_secret": [
+      {
+        "events": [
+          "Normal   Scheduled   default-scheduler  Successfully assigned {namespace}/{pod_name} to {node_name}",
+          "Warning  FailedMount kubelet            MountVolume.SetUp failed for volume \"secret\": secret \"{secret_name}\" not found",
+          "Warning  BackOff     kubelet            Back-off restarting failed container"
+        ],
+        "logs": [
+          "FATAL: could not load credentials from /etc/secrets/creds.json",
+          "exit status 1"
+        ],
+        "root_cause": "Secret {secret_name} missing or wrong namespace",
+        "expected_fix": {
+          "summary": "Create secret {secret_name} or fix secret reference",
+          "kind": "create_secret",
+          "kubectl_hint": "kubectl -n {namespace} get secret {secret_name} || kubectl -n {namespace} create secret generic {secret_name} --from-literal=..."
+        }
+      }
+    ],
+    "missing_env_var": [
+      {
+        "events": [
+          "Normal   Scheduled  default-scheduler  Successfully assigned {namespace}/{pod_name} to {node_name}",
+          "Normal   Pulled     kubelet            Container image already present on machine",
+          "Warning  BackOff    kubelet            Back-off restarting failed container"
+        ],
+        "logs": [
+          "panic: required environment variable {env_var} is not set",
+          "exit status 2"
+        ],
+        "root_cause": "Missing required environment variable {env_var}",
+        "expected_fix": {
+          "summary": "Patch workload env var {env_var}",
+          "kind": "patch_deployment_env",
+          "kubectl_hint": "kubectl -n {namespace} set env {workload_kind_lower}/{workload_name} {env_var}=<value>"
+        }
+      }
+    ],
+    "bad_config": [
+      {
+        "events": [
+          "Normal   Scheduled  default-scheduler  Successfully assigned {namespace}/{pod_name} to {node_name}",
+          "Normal   Pulled     kubelet            Container image already present on machine",
+          "Warning  BackOff    kubelet            Back-off restarting failed container"
+        ],
+        "logs": [
+          "FATAL: failed to load config from {config_path}",
+          "yaml: line 12: did not find expected key",
+          "exit status 1"
+        ],
+        "root_cause": "Application failed to start due to invalid configuration (config parse/validation error)",
+        "expected_fix": {
+          "summary": "Fix invalid configuration (ConfigMap/env values) and restart rollout",
+          "kind": "patch_config",
+          "kubectl_hint": "kubectl -n {namespace} edit {workload_kind_lower}/{workload_name}"
+        }
+      }
+    ],
+    "startup_exception": [
+      {
+        "events": [
+          "Normal   Scheduled  default-scheduler  Successfully assigned {namespace}/{pod_name} to {node_name}",
+          "Normal   Pulled     kubelet            Container image already present on machine",
+          "Warning  BackOff    kubelet            Back-off restarting failed container"
+        ],
+        "logs": [
+          "Traceback (most recent call last):",
+          "  File \"/app/main.py\", line 42, in <module>",
+          "    main()",
+          "Exception: Unhandled exception at startup",
+          "Process terminated"
+        ],
+        "root_cause": "Application bug causing crash on startup (unhandled exception)",
+        "expected_fix": {
+          "summary": "Rollback to last known good image or hotfix application",
+          "kind": "rollback_deployment",
+          "kubectl_hint": "kubectl -n {namespace} rollout undo {workload_kind_lower}/{workload_name}"
+        }
+      }
+    ],
+    "oom": [
+      {
+        "events": [
+          "Normal   Scheduled  default-scheduler  Successfully assigned {namespace}/{pod_name} to {node_name}",
+          "Warning  OOMKilled  kubelet            Container killed due to OOM",
+          "Warning  BackOff    kubelet            Back-off restarting failed container"
+        ],
+        "logs": [
+          "Killed",
+          "OOMKilled: Container was killed due to memory usage"
+        ],
+        "root_cause": "Insufficient memory limit causing OOMKilled during startup",
+        "expected_fix": {
+          "summary": "Increase memory requests/limits or reduce startup memory usage",
+          "kind": "patch_resources",
+          "kubectl_hint": "kubectl -n {namespace} set resources {workload_kind_lower}/{workload_name} --limits=memory=512Mi --requests=memory=256Mi"
+        }
+      }
+    ],
+    "disk_pressure": [
+      {
+        "events": [
+          "Warning  Evicted      kubelet  The node was low on resource: ephemeral-storage.",
+          "Warning  DiskPressure kubelet  Node is under disk pressure",
+          "Warning  BackOff      kubelet  Back-off restarting failed container"
+        ],
+        "logs": [
+          "ERROR: write /tmp/app.cache: no space left on device",
+          "FATAL: cannot create temp files",
+          "exit status 1"
+        ],
+        "root_cause": "Node under disk pressure / ephemeral-storage exhaustion causing failures/evictions",
+        "expected_fix": {
+          "summary": "Free disk / increase ephemeral storage / fix log growth",
+          "kind": "free_disk",
+          "kubectl_hint": "kubectl describe node {node_name} && kubectl -n {namespace} describe pod {pod_name}"
+        }
+      }
+    ],
+    "cpu_starvation": [
+      {
+        "events": [
+          "Warning  Unhealthy  kubelet  Startup probe failed: timeout",
+          "Warning  BackOff    kubelet  Back-off restarting failed container"
+        ],
+        "logs": [
+          "ERROR: startup timed out waiting for background tasks",
+          "Hint: CPU starvation suspected"
+        ],
+        "root_cause": "Insufficient CPU request/limit causing startup timeouts",
+        "expected_fix": {
+          "summary": "Increase CPU requests/limits or relax startup probe thresholds",
+          "kind": "patch_resources",
+          "kubectl_hint": "kubectl -n {namespace} set resources {workload_kind_lower}/{workload_name} --limits=cpu=500m --requests=cpu=200m"
+        }
+      }
+    ],
+    "dependency_database_unavailable": [
+      {
+        "events": [
+          "Warning  BackOff  kubelet  Back-off restarting failed container"
+        ],
+        "logs": [
+          "ERROR: could not connect to postgres: dial tcp: connect: connection refused",
+          "Retrying (1/5)...",
+          "Exiting after retries"
+        ],
+        "root_cause": "Database unavailable (service down / connection refused)",
+        "expected_fix": {
+          "summary": "Restore database availability (service/endpoints/network-policy) then retry",
+          "kind": "restore_database",
+          "kubectl_hint": "kubectl -n {namespace} get svc,endpoints | findstr postgres"
+        }
+      }
+    ],
+    "dependency_redis_unavailable": [
+      {
+        "events": [
+          "Warning  BackOff  kubelet  Back-off restarting failed container"
+        ],
+        "logs": [
+          "ERROR: failed to connect to redis: dial tcp: connect: connection refused",
+          "Retrying (1/5)...",
+          "Exiting after retries"
+        ],
+        "root_cause": "Redis unavailable (service down / connection refused)",
+        "expected_fix": {
+          "summary": "Restore Redis availability (service/endpoints) then retry",
+          "kind": "restore_redis",
+          "kubectl_hint": "kubectl -n {namespace} get svc,endpoints | findstr redis"
+        }
+      }
+    ],
+    "dependency_dns_failure": [
+      {
+        "events": [
+          "Warning  BackOff  kubelet  Back-off restarting failed container"
+        ],
+        "logs": [
+          "ERROR: failed to resolve {dependency_service}: dial tcp: lookup {dependency_service}: no such host",
+          "Retrying (1/3)...",
+          "Exiting after retries"
+        ],
+        "root_cause": "DNS resolution failure for dependency service {dependency_service}",
+        "expected_fix": {
+          "summary": "Fix DNS/service discovery for {dependency_service} (Service name/namespace/CoreDNS)",
+          "kind": "fix_dns",
+          "kubectl_hint": "kubectl -n {namespace} get svc,endpoints | findstr {dependency_service}"
+        }
+      }
+    ]
+  }
+}
+

@@ -16,9 +16,9 @@ from __future__ import annotations
 import argparse
 import json
 import random
-import uuid
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from incident_agent.datasets.crashloopbackoff.schema import (
     Alert,
@@ -40,10 +40,10 @@ def _pick(rng: random.Random, items: list[str]) -> str:
     return items[rng.randrange(0, len(items))]
 
 
-def _incident_id() -> str:
-    # Concept: IDs are stable-format but unique;
-    # prefix helps quick visual filtering in logs/datasets.
-    return f"clb-{uuid.uuid4().hex[:12]}"
+def _incident_id_from_rng(rng: random.Random) -> str:
+    # Concept: deterministic IDs per record (reproducible datasets).
+    # We avoid uuid4() because it's not seedable.
+    return f"clb-{rng.getrandbits(48):012x}"
 
 
 def _base_alert(target: K8sRef, *, rng: random.Random) -> Alert:
@@ -78,6 +78,72 @@ def _mk_target(*, rng: random.Random) -> K8sRef:
     return K8sRef(namespace=_pick(rng, namespaces), kind=kind, name=name)
 
 
+class _Fmt(dict[str, str]):
+    def __missing__(self, key: str) -> str:  # pragma: no cover
+        return f"<{key}>"
+
+
+_FIXTURES_CACHE: dict[str, Any] | None = None
+
+
+def _default_fixtures_path() -> Path:
+    return Path(__file__).parent / "fixtures" / "crashloop_fixtures.json"
+
+
+def _load_fixtures(path: Path) -> dict[str, list[dict[str, Any]]]:
+    global _FIXTURES_CACHE
+    if _FIXTURES_CACHE is None:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        _FIXTURES_CACHE = raw
+    fixtures = _FIXTURES_CACHE.get("fixtures", {})  # type: ignore[union-attr]
+    if not isinstance(fixtures, dict):
+        return {}
+    # mypy: runtime-checked shape
+    return fixtures  # type: ignore[return-value]
+
+
+def _fmt_lines(lines: list[str], ctx: dict[str, str]) -> list[str]:
+    fm = _Fmt(ctx)
+    return [s.format_map(fm) for s in lines]
+
+
+def _sample_fixture(
+    *,
+    rng: random.Random,
+    category: str,
+    ctx: dict[str, str],
+    fixtures_path: Path,
+) -> tuple[list[str], list[str], str, ExpectedFix] | None:
+    fixtures = _load_fixtures(fixtures_path)
+    options = fixtures.get(category)
+    if not options:
+        return None
+    fx = options[rng.randrange(0, len(options))]
+    if not isinstance(fx, dict):
+        return None
+
+    logs = _fmt_lines(list(fx.get("logs", [])), ctx)
+    events = _fmt_lines(list(fx.get("events", [])), ctx)
+    root_cause = str(fx.get("root_cause", "")).format_map(_Fmt(ctx))
+
+    ef = fx.get("expected_fix", {})
+    if not isinstance(ef, dict):
+        ef = {}
+    expected_fix = ExpectedFix(
+        summary=str(ef.get("summary", "")).format_map(_Fmt(ctx)),
+        kind=(str(ef.get("kind")) if ef.get("kind") is not None else None),
+        kubectl_hint=(
+            str(ef.get("kubectl_hint")).format_map(_Fmt(ctx))
+            if ef.get("kubectl_hint") is not None
+            else None
+        ),
+    )
+
+    if not root_cause or not expected_fix.summary:
+        return None
+    return logs, events, root_cause, expected_fix
+
+
 def make_incident(*, seed: int, idx: int) -> CrashLoopBackOffIncident:
     # Concept: reproducibility strategy.
     # Each record gets its own RNG stream (`seed + idx`) so:
@@ -88,15 +154,23 @@ def make_incident(*, seed: int, idx: int) -> CrashLoopBackOffIncident:
     category = _pick(
         rng,
         [
-            "missing_env_var",
-            "bad_env_var_value",
-            "missing_configmap",
+            # Invalid Image
+            "invalid_image_wrong_tag",
+            "invalid_image_deleted_image",
+            "invalid_image_private_registry_auth",
+            # Application Failure
             "missing_secret",
-            "misconfigured_volume_mount",
-            "dependency_unavailable",
-            "app_bug_unhandled_exception",
-            "resource_constraint_oom",
-            "resource_constraint_cpu",
+            "missing_env_var",
+            "bad_config",
+            "startup_exception",
+            # Resource Failure
+            "oom",
+            "disk_pressure",
+            "cpu_starvation",
+            # Dependency Failure
+            "dependency_database_unavailable",
+            "dependency_redis_unavailable",
+            "dependency_dns_failure",
         ],
     )
 
@@ -109,155 +183,44 @@ def make_incident(*, seed: int, idx: int) -> CrashLoopBackOffIncident:
     ]
     distractors: list[str] = []
 
-    if category == "missing_env_var":
-        # Concept: a "category" is a label you can use for evaluation and training.
-        # Each branch builds a coherent story: symptom (logs/events) ⇒ root cause ⇒ expected fix.
-        missing = _pick(rng, ["DB_HOST", "REDIS_URL", "API_URL", "S3_BUCKET"])
-        logs = [
-            f"Error: {missing} environment variable missing",
-            "Process exiting with code 1",
-        ]
-        root_cause = f"Missing required environment variable {missing}"
-        expected_fix = ExpectedFix(
-            summary=f"Patch workload env var {missing}",
-            kind="patch_deployment_env",
-            kubectl_hint=(
-                f"kubectl -n {target.namespace} set env "
-                f"{target.kind.lower()}/{target.name} {missing}=<value>"
-            ),
-        )
-    elif category == "bad_env_var_value":
-        var = _pick(rng, ["API_URL", "DB_PORT", "LOG_LEVEL"])
-        bad = _pick(rng, ["htp://bad-url", "99999", "VERBOSEST"])
-        logs = [
-            f"ConfigError: invalid value for {var}={bad}",
-            "Failed to start application",
-        ]
-        root_cause = f"Incorrect environment variable value ({var} invalid)"
-        expected_fix = ExpectedFix(
-            summary=f"Correct env var value for {var}",
-            kind="patch_deployment_env",
-            kubectl_hint=(
-                f"kubectl -n {target.namespace} set env "
-                f"{target.kind.lower()}/{target.name} {var}=<valid>"
-            ),
-        )
-    elif category == "missing_configmap":
-        cm = _pick(rng, ["app-config", "runtime-config", "feature-flags"])
-        events.append(
-            'Warning  FailedMount  kubelet  MountVolume.SetUp failed for volume "config": '
-            f'configmap "{cm}" not found'
-        )
-        logs = ["FATAL: required configuration file not found at /etc/app/config.yaml"]
-        root_cause = f"ConfigMap {cm} missing or misnamed"
-        expected_fix = ExpectedFix(
-            summary=f"Create or reference correct ConfigMap {cm}",
-            kind="create_configmap",
-            kubectl_hint=(
-                f"kubectl -n {target.namespace} get configmap {cm} || "
-                f"kubectl -n {target.namespace} apply -f <configmap>.yaml"
-            ),
-        )
-    elif category == "missing_secret":
-        secret = _pick(rng, ["db-credentials", "api-keys", "tls-cert"])
-        events.append(
-            'Warning  FailedMount  kubelet  MountVolume.SetUp failed for volume "secret": '
-            f'secret "{secret}" not found'
-        )
-        logs = ["FATAL: could not load credentials from /etc/secrets/creds.json"]
-        root_cause = f"Secret {secret} missing or wrong namespace"
-        expected_fix = ExpectedFix(
-            summary=f"Create secret {secret} or fix secret reference",
-            kind="create_secret",
-            kubectl_hint=(
-                f"kubectl -n {target.namespace} get secret {secret} || "
-                f"kubectl -n {target.namespace} create secret generic {secret} "
-                "--from-literal=..."
-            ),
-        )
-    elif category == "misconfigured_volume_mount":
-        path = _pick(rng, ["/var/lib/app", "/data", "/etc/app"])
-        logs = [
-            f"panic: cannot open {path}/state.db: no such file or directory",
-            "stacktrace: ...",
-        ]
-        events.append(
-            "Warning  FailedMount  kubelet  MountVolume.SetUp failed: path does not exist"
-        )
-        root_cause = "Misconfigured volume mount (path mismatch or missing directory)"
-        expected_fix = ExpectedFix(
-            summary="Fix volumeMount path / volume configuration",
-            kind="patch_resource",
-            kubectl_hint=f"kubectl -n {target.namespace} edit {target.kind.lower()}/{target.name}",
-        )
-    elif category == "dependency_unavailable":
-        dep = _pick(rng, ["redis", "postgres", "kafka", "auth-service"])
-        logs = [
-            f"ERROR: failed to connect to {dep}: dial tcp: lookup {dep}: no such host",
-            "Retrying (1/3)...",
-            "Exiting after retries",
-        ]
-        # Concept: distractors (noise) improve robustness.
-        # The incident still contains the true clue, but also plausible "everything looks OK" lines.
-        # This discourages simplistic keyword matching and teaches reasoning over multiple signals.
-        distractors = ["INFO: starting HTTP server on :8080", "INFO: loaded config OK"]
-        root_cause = f"Dependency unavailable or DNS/network misconfiguration for {dep}"
-        expected_fix = ExpectedFix(
-            summary=f"Restore dependency {dep} / fix Service DNS / network policy",
-            kind="restore_dependency",
-            kubectl_hint=f"kubectl -n {target.namespace} get svc,endpoints | findstr {dep}",
-        )
-    elif category == "app_bug_unhandled_exception":
-        logs = [
-            "Unhandled exception: NullReferenceError at startup",
-            "Traceback (most recent call last):",
-            "  at main() ...",
-            "Process terminated",
-        ]
-        root_cause = "Application bug causing crash on startup (unhandled exception)"
-        expected_fix = ExpectedFix(
-            summary="Rollback to last known good image or hotfix application",
-            kind="rollback_deployment",
-            kubectl_hint=(
-                f"kubectl -n {target.namespace} rollout undo "
-                f"{target.kind.lower()}/{target.name}"
-            ),
-        )
-    elif category == "resource_constraint_oom":
-        logs = [
-            "Killed",
-            "OOMKilled: Container was killed due to memory usage",
-        ]
-        events.append("Warning  OOMKilled  kubelet  Container killed due to OOM")
-        root_cause = "Insufficient memory limit causing OOMKilled during startup"
-        expected_fix = ExpectedFix(
-            summary="Increase memory requests/limits or reduce startup memory usage",
-            kind="patch_resources",
-            kubectl_hint=(
-                f"kubectl -n {target.namespace} set resources "
-                f"{target.kind.lower()}/{target.name} "
-                "--limits=memory=512Mi --requests=memory=256Mi"
-            ),
-        )
-    else:  # resource_constraint_cpu
-        logs = [
-            "ERROR: startup timed out waiting for background tasks",
-            "Hint: CPU starvation suspected",
-        ]
-        events.append("Warning  Unhealthy  kubelet  Startup probe failed: timeout")
-        root_cause = "Insufficient CPU request/limit causing startup timeouts"
-        expected_fix = ExpectedFix(
-            summary="Increase CPU requests/limits or relax startup probe thresholds",
-            kind="patch_resources",
-            kubectl_hint=(
-                f"kubectl -n {target.namespace} set resources "
-                f"{target.kind.lower()}/{target.name} "
-                "--limits=cpu=500m --requests=cpu=200m"
-            ),
+    # ---- fixtures-driven realism ----
+    # Default fixtures file can be replaced by providing your own captured logs later.
+    fixtures_path = _default_fixtures_path()
+    ctx: dict[str, str] = {
+        "namespace": target.namespace,
+        "workload_kind": target.kind,
+        "workload_kind_lower": target.kind.lower(),
+        "workload_name": target.name,
+        # pseudo pod/node ids (deterministic-ish and plausible)
+        "pod_name": f"{target.name}-{rng.getrandbits(20):05x}",
+        "node_name": f"node-{rng.getrandbits(16):04x}",
+        # common placeholders used across fixtures
+        "secret_name": _pick(rng, ["db-credentials", "api-keys", "tls-cert"]),
+        "env_var": _pick(rng, ["DB_HOST", "REDIS_URL", "API_URL", "S3_BUCKET"]),
+        "config_path": _pick(rng, ["/etc/app/config.yaml", "/app/config.yml", "/config/app.json"]),
+        "dependency_service": _pick(rng, ["postgres", "redis", "auth-service", "kafka"]),
+        "image": (
+            f"{_pick(rng, ['docker.io/library/nginx', 'ghcr.io/acme/demo', 'registry.example.com/app'])}:"
+            f"{_pick(rng, ['v99.0.0', 'bad-tag', 'does-not-exist', 'prod'])}"
+        ),
+    }
+
+    sampled = _sample_fixture(
+        rng=rng,
+        category=category,
+        ctx=ctx,
+        fixtures_path=fixtures_path,
+    )
+    if sampled is not None:
+        logs, events, root_cause, expected_fix = sampled
+    else:
+        raise RuntimeError(
+            f"Missing fixtures for category={category!r}. "
+            f"Expected to find it in {fixtures_path}."
         )
 
     return CrashLoopBackOffIncident(
-        incident_id=_incident_id(),
+        incident_id=_incident_id_from_rng(rng),
         created_at=_now(),
         target=target,
         alert=_base_alert(target, rng=rng),

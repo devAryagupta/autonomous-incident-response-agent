@@ -36,7 +36,11 @@ class OracleCrashLoopPredictor:
             predicted_fix_summary=incident.expected_fix.summary,
             predicted_fix_kind=incident.expected_fix.kind,
             predicted_diagnosis=incident.root_cause,
-            predicted_hypotheses=[HypothesisPrediction(cause=_canonical_cause(incident.category))],
+            predicted_hypotheses=[
+                HypothesisPrediction(cause=_canonical_cause(incident.category), likelihood=1.0)
+            ],
+            predicted_validation_passed=True,
+            predicted_confidence_score=1.0,
         )
 
 
@@ -98,6 +102,23 @@ class HeuristicCrashLoopPredictor:
 def _canonical_cause(category: str) -> str:
     # Keep in sync with datasets.eval canonicalization.
     mapping = {
+        # Invalid Image
+        "invalid_image_wrong_tag": "Invalid Image Tag / Image Pull Error",
+        "invalid_image_deleted_image": "Invalid Image Tag / Image Pull Error",
+        "invalid_image_private_registry_auth": "Invalid Image Tag / Image Pull Error",
+        # Application Failure
+        "bad_config": "Bad Configuration / Config Parse Error",
+        "startup_exception": "Application Bug / Unhandled Exception",
+        # Resource Failure
+        "oom": "Resource Constraint (OOMKilled)",
+        "disk_pressure": "Resource Constraint (Disk Pressure / No Space)",
+        "cpu_starvation": "Resource Constraint (CPU Starvation)",
+        # Dependency Failure
+        "dependency_database_unavailable": "Database Unavailable",
+        "dependency_redis_unavailable": "Redis Unavailable",
+        "dependency_dns_failure": "DNS Resolution Failure",
+
+        # Legacy
         "missing_secret": "Missing Secret",
         "missing_env_var": "Missing Environment Variable",
         "missing_configmap": "Missing ConfigMap",
@@ -129,11 +150,15 @@ def _write_report(report: EvalReport, *, out_path: Path, meta: dict) -> None:
         "meta": meta,
         "report": {
             "total_incidents": report.counts.total,
+            "predictions_found": report.counts.predictions_found,
             "category_accuracy": report.category_accuracy,
             "hypothesis_top1_accuracy": report.hypothesis_top1_accuracy,
             "hypothesis_top3_accuracy": report.hypothesis_top3_accuracy,
             "fix_kind_accuracy": report.fix_kind_accuracy,
             "diagnosis_accuracy": report.diagnosis_accuracy,
+            "validation_pass_rate": report.validation_pass_rate,
+            "average_confidence": report.average_confidence,
+            "confidence_calibration_ece": report.confidence_calibration_ece,
             "predicted_root_cause_nonempty": report.counts.root_cause_nonempty,
             "predicted_fix_nonempty": report.counts.fix_nonempty,
         },
@@ -211,6 +236,15 @@ def main(argv: list[str] | None = None) -> int:
     print("Benchmark complete")
     print(f"- task: {args.task}")
     print(f"- baseline: {args.baseline}")
+    print(f"- diagnosis_accuracy: {report.diagnosis_accuracy:.3f}")
+    print(f"- top1_hypothesis_accuracy: {report.hypothesis_top1_accuracy:.3f}")
+    print(f"- top3_hypothesis_accuracy: {report.hypothesis_top3_accuracy:.3f}")
+    print(f"- fix_accuracy: {report.fix_kind_accuracy:.3f}")
+    print(f"- validation_pass_rate: {report.validation_pass_rate:.3f}")
+    if report.average_confidence is not None:
+        print(f"- average_confidence: {report.average_confidence:.3f}")
+    if report.confidence_calibration_ece is not None:
+        print(f"- confidence_calibration_ece: {report.confidence_calibration_ece:.3f}")
     print(f"- category_accuracy: {report.category_accuracy:.3f}")
     print(f"- predictions: {artifacts.predictions_path}")
     print(f"- report: {artifacts.report_path}")

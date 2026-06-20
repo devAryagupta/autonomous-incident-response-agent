@@ -6,10 +6,28 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 CrashLoopCategory = Literal[
+    # --- v2-ish expanded categories (keep schema_version="1" for now) ---
+    # Invalid Image
+    "invalid_image_wrong_tag",
+    "invalid_image_deleted_image",
+    "invalid_image_private_registry_auth",
+    # Application Failure
+    "missing_secret",
     "missing_env_var",
+    "bad_config",
+    "startup_exception",
+    # Resource Failure
+    "oom",
+    "disk_pressure",
+    "cpu_starvation",
+    # Dependency Failure
+    "dependency_database_unavailable",
+    "dependency_redis_unavailable",
+    "dependency_dns_failure",
+
+    # --- legacy categories (backward compatible with older datasets/tests) ---
     "bad_env_var_value",
     "missing_configmap",
-    "missing_secret",
     "misconfigured_volume_mount",
     "dependency_unavailable",
     "app_bug_unhandled_exception",

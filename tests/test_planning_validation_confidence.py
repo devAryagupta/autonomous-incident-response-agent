@@ -1,6 +1,6 @@
 from datetime import UTC, datetime
 
-from incident_agent.contracts import Alert, Diagnosis
+from incident_agent.contracts import Alert, Diagnosis, IncidentState, Observations
 from incident_agent.nodes.hypothesize import hypothesize
 from incident_agent.nodes.plan_fix import plan_fix
 from incident_agent.nodes.score_confidence import score_confidence
@@ -22,14 +22,25 @@ def test_plan_validate_score_is_deterministic() -> None:
         "Back-off restarting failed container",
     ]
 
-    hyps = hypothesize(alert=alert, logs=logs, diagnosis=diagnosis, top_n=3)
-    fix_plan, match = plan_fix(hypotheses=hyps, target_ref="deployment/demo-app")
-    validation = validate_fix(fix_plan=fix_plan)
-    conf = score_confidence(hypotheses=hyps, fix_plan=fix_plan, validation=validation)
+    state = IncidentState(
+        incident_id="inc-1",
+        created_at=datetime.now(tz=UTC),
+        alert=alert,
+        observations=Observations(logs=list(logs), events=[]),
+        diagnosis=diagnosis,
+    )
+    state.observations.extra["top_n"] = 3
+    state.observations.extra["target_ref"] = "deployment/demo-app"
 
-    assert match.matched_rule is not None
-    assert fix_plan.actions
-    assert validation and validation[0].success is True
+    state.hypotheses = hypothesize(state)["hypotheses"]  # type: ignore[assignment]
+    state.fix_plan = plan_fix(state)["fix_plan"]  # type: ignore[assignment]
+    updates = validate_fix(state)
+    state.validation = updates["validation"]  # type: ignore[assignment]
+    state.validation_verdict = updates["validation_verdict"]  # type: ignore[assignment]
+    conf = score_confidence(state)["confidence"]
+
+    assert state.fix_plan.actions
+    assert state.validation and state.validation[0].success is True
     assert 0.0 <= conf.score <= 1.0
 
 
@@ -40,10 +51,22 @@ def test_noop_plan_reduces_confidence() -> None:
         starts_at=datetime.now(tz=UTC),
     )
     diagnosis = Diagnosis(summary="Unclear crash", confidence=0.4)
-    hyps = hypothesize(alert=alert, logs=["random"], diagnosis=diagnosis, top_n=2)
-    fix_plan, _ = plan_fix(hypotheses=hyps, target_ref="deployment/demo-app")
-    validation = validate_fix(fix_plan=fix_plan)
-    conf = score_confidence(hypotheses=hyps, fix_plan=fix_plan, validation=validation)
+    state = IncidentState(
+        incident_id="inc-2",
+        created_at=datetime.now(tz=UTC),
+        alert=alert,
+        observations=Observations(logs=["random"], events=[]),
+        diagnosis=diagnosis,
+    )
+    state.observations.extra["top_n"] = 2
+    state.observations.extra["target_ref"] = "deployment/demo-app"
+
+    state.hypotheses = hypothesize(state)["hypotheses"]  # type: ignore[assignment]
+    state.fix_plan = plan_fix(state)["fix_plan"]  # type: ignore[assignment]
+    updates = validate_fix(state)
+    state.validation = updates["validation"]  # type: ignore[assignment]
+    state.validation_verdict = updates["validation_verdict"]  # type: ignore[assignment]
+    conf = score_confidence(state)["confidence"]
 
     # Not a strict numeric expectation, just ensure score is bounded and reason is present.
     assert 0.0 <= conf.score <= 1.0
