@@ -1,16 +1,17 @@
 from __future__ import annotations
 
-from incident_agent.contracts import ConfidenceScore, FixPlan, Hypothesis, ValidationResult
+from incident_agent.contracts import (
+    ConfidenceScore,
+    FixActionType,
+    IncidentState,
+)
 
 
 def score_confidence(
-    *,
-    hypotheses: list[Hypothesis],
-    fix_plan: FixPlan,
-    validation: list[ValidationResult],
-) -> ConfidenceScore:
+    state: IncidentState,
+) -> dict[str, object]:
     """
-    Deterministic confidence scoring baseline (no metrics, no LLM).
+    Heuristic confidence node (state-in, partial-state-out).
 
     Heuristic:
     - start with top hypothesis likelihood (0 if none)
@@ -18,27 +19,31 @@ def score_confidence(
     - penalize if validation failed
     - map risk: low no penalty, medium -0.1, high -0.2
     """
-    top = hypotheses[0].likelihood if hypotheses else 0.0
+    if state.fix_plan is None:
+        raise ValueError("state.fix_plan is required before score_confidence()")
+
+    top = state.hypotheses[0].likelihood if state.hypotheses else 0.0
     score = float(top)
     reasons: list[str] = [f"Top hypothesis likelihood={top:.3f}"]
 
-    if any(a.kind == "noop" for a in fix_plan.actions):
+    if any(a.action_type == FixActionType.NOOP for a in state.fix_plan.actions):
         score -= 0.25
         reasons.append("Plan contains noop action (no remediation rule match)")
 
-    if validation and not all(v.success for v in validation):
+    if state.validation and not all(v.success for v in state.validation):
         score -= 0.35
         reasons.append("Validation failed")
-    elif validation:
+    elif state.validation:
         reasons.append("Validation passed")
 
-    if fix_plan.risk == "medium":
+    if state.fix_plan.risk == "medium":
         score -= 0.10
         reasons.append("Risk=medium penalty")
-    elif fix_plan.risk == "high":
+    elif state.fix_plan.risk == "high":
         score -= 0.20
         reasons.append("Risk=high penalty")
 
     score = max(0.0, min(1.0, score))
-    return ConfidenceScore(score=round(score, 4), explanation="; ".join(reasons))
+    conf = ConfidenceScore(score=round(score, 4), explanation="; ".join(reasons))
+    return {"confidence": conf, "confidence_score": conf.score}
 

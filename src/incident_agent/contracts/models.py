@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from enum import StrEnum
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -55,28 +56,34 @@ class Hypothesis(ContractBase):
     evidence: list[Evidence] = Field(default_factory=list)
 
 
-FixActionKind = Literal[
-    "restart_pod",
-    "scale_deployment",
-    "rollback",
-    "patch_resource",
-    "noop",
-]
+class FixActionType(StrEnum):
+    RESTART_POD = "restart_pod"
+    ROLLBACK_DEPLOYMENT = "rollback_deployment"
+    SCALE_DEPLOYMENT = "scale_deployment"
+    PATCH_CONFIG = "patch_config"
+    PATCH_RESOURCE = "patch_resource"
+    NOOP = "noop"
 
 
 class FixAction(ContractBase):
     schema_version: SchemaVersion = "1"
-    kind: FixActionKind
-    target_ref: str
+    action_type: FixActionType = Field(validation_alias="kind")
+    target: str = Field(validation_alias="target_ref")
     params: dict[str, Any] = Field(default_factory=dict)
     rationale: str
+
+
+class RiskLevel(StrEnum):
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
 
 
 class FixPlan(ContractBase):
     schema_version: SchemaVersion = "1"
     hypothesis_id: str | None = None
     actions: list[FixAction] = Field(default_factory=list)
-    risk: Literal["low", "medium", "high"] = "low"
+    risk: RiskLevel = Field(default=RiskLevel.LOW)
     notes: str | None = None
 
 
@@ -127,21 +134,79 @@ class ExecutionResult(ContractBase):
     finished_at: datetime | None = None
 
 
+class ResourceRef(ContractBase):
+    """Source-agnostic pointer to the impacted resource.
+
+    Keep this generic initially (no Kubernetes client types).
+    """
+
+    schema_version: SchemaVersion = "1"
+    system: str = "kubernetes"
+    namespace: str | None = None
+    kind: str | None = None
+    name: str | None = None
+    uid: str | None = None
+    cluster: str | None = None
+
+
+class Observations(ContractBase):
+    """Raw signals the agent reasons over.
+
+    Deterministic baseline: only logs/events strings.
+    Later: add structured metrics/describe outputs without changing call sites.
+    """
+
+    schema_version: SchemaVersion = "1"
+    logs: list[str] = Field(default_factory=list)
+    events: list[str] = Field(default_factory=list)
+    extra: dict[str, Any] = Field(default_factory=dict)
+
+
+IncidentPhase = Literal[
+    "ingest",
+    "diagnose",
+    "hypothesize",
+    "plan_fix",
+    "validate_fix",
+    "score_confidence",
+    "approve",
+    "execute",
+    "done",
+]
+
+
 class IncidentState(ContractBase):
-    """Top-level object the agent passes around (even before LangGraph exists)."""
+    """Top-level state passed between nodes (even before LangGraph exists).
+
+    Design goals:
+    - One contract for the whole pipeline (alert → diagnose → hypothesize → plan → validate → score)
+    - Deterministic-first: nodes can run without any external systems
+    - Backward-compatible: new fields are optional or have safe defaults
+    """
 
     schema_version: SchemaVersion = "1"
     incident_id: str
     created_at: datetime
 
+    # identity / routing
+    thread_id: str | None = None
+    phase: IncidentPhase = "ingest"
+    route: str | None = None
+
+    # impacted resource (optional in deterministic baselines)
+    resource: ResourceRef | None = None
+
     # pipeline payloads
     alert: Alert
+    observations: Observations = Field(default_factory=Observations)
     diagnosis: Diagnosis | None = None
     hypotheses: list[Hypothesis] = Field(default_factory=list)
     chosen_hypothesis_id: str | None = None
     fix_plan: FixPlan | None = None
     validation: list[ValidationResult] = Field(default_factory=list)
+    validation_verdict: ValidationVerdict | None = None
     confidence: ConfidenceScore | None = None
+    confidence_score: float | None = None
     approval: Approval | None = None
     execution: ExecutionResult | None = None
 

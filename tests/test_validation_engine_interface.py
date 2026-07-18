@@ -1,4 +1,4 @@
-from incident_agent.contracts import FixAction, FixPlan
+from incident_agent.contracts import FixAction, FixActionType, FixPlan
 from incident_agent.validation import validate_plan
 
 
@@ -8,8 +8,8 @@ def test_validation_engine_interface() -> None:
         risk="low",
         actions=[
             FixAction(
-                kind="patch_resource",
-                target_ref="deployment/demo-app",
+                action_type=FixActionType.PATCH_RESOURCE,
+                target="deployment/demo-app",
                 params={},
                 rationale="test",
             )
