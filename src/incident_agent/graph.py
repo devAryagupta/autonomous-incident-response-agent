@@ -12,7 +12,9 @@ except Exception as e:  # pragma: no cover
     ) from e
 
 
-def _apply_node(*, phase: str, fn):
+def _with_phase(*, phase: str, fn):
+    """Wrap a node so it returns a partial state update and sets `phase`."""
+
     def _wrapped(state: IncidentState) -> dict[str, object]:
         updates = dict(fn(state))
         updates["phase"] = phase
@@ -21,42 +23,28 @@ def _apply_node(*, phase: str, fn):
     return _wrapped
 
 
-def ingest(state: IncidentState) -> dict[str, object]:
-    """
-    Ingest node.
-
-    Keeps orchestration trivial: only ensures defaults exist in `observations.extra`.
-    """
-    obs: Observations = state.observations.model_copy(deep=True)
-    obs.extra.setdefault("top_n", 3)
-    obs.extra.setdefault("target_ref", "<workload>")
-    return {"observations": obs, "phase": "ingest"}
+def confidence(state: IncidentState) -> dict[str, object]:
+    """Final node: score confidence and mark the lifecycle done."""
+    updates = dict(compute_confidence(state))
+    updates["phase"] = "done"
+    return updates
 
 
 def build_graph():
     """
-    Straight-line orchestration graph.
+    Straight-line LangGraph orchestration.
 
-    ingest -> diagnose -> hypothesize -> plan_fix -> validate_fix -> confidence
+    START -> diagnose -> hypothesize -> plan_fix -> validate_fix -> confidence -> END
     """
-    g = StateGraph(IncidentState, input_schema=IncidentState, output_schema=IncidentState)
+    g = StateGraph(IncidentState)
 
-    g.add_node("ingest", ingest)
-    g.add_node("diagnose", _apply_node(phase="diagnose", fn=diagnose))
-    g.add_node("hypothesize", _apply_node(phase="hypothesize", fn=hypothesize))
-    g.add_node("plan_fix", _apply_node(phase="plan_fix", fn=plan_fix))
-    g.add_node("validate_fix", _apply_node(phase="validate_fix", fn=validate_fix))
+    g.add_node("diagnose", _with_phase(phase="diagnose", fn=diagnose))
+    g.add_node("hypothesize", _with_phase(phase="hypothesize", fn=hypothesize))
+    g.add_node("plan_fix", _with_phase(phase="plan_fix", fn=plan_fix))
+    g.add_node("validate_fix", _with_phase(phase="validate_fix", fn=validate_fix))
+    g.add_node("confidence", confidence)
 
-    # Final node: compute confidence and mark done (matches pipeline's final state).
-    def _confidence(state: IncidentState) -> dict[str, object]:
-        updates = dict(compute_confidence(state))
-        updates["phase"] = "done"
-        return updates
-
-    g.add_node("confidence", _confidence)
-
-    g.add_edge(START, "ingest")
-    g.add_edge("ingest", "diagnose")
+    g.add_edge(START, "diagnose")
     g.add_edge("diagnose", "hypothesize")
     g.add_edge("hypothesize", "plan_fix")
     g.add_edge("plan_fix", "validate_fix")
@@ -65,8 +53,9 @@ def build_graph():
 
     return g.compile()
 
+
 class IncidentStateGraph:
-    """Tiny wrapper so `invoke()` returns an IncidentState contract."""
+    """Thin wrapper so `invoke()` always returns an `IncidentState` contract."""
 
     def __init__(self, app) -> None:
         self._app = app
@@ -75,9 +64,7 @@ class IncidentStateGraph:
         out = self._app.invoke(state)
         if isinstance(out, IncidentState):
             return out
-        # LangGraph returns raw dicts for state; normalize back to contract.
         return IncidentState.model_validate(out)
 
 
 GRAPH = IncidentStateGraph(build_graph())
-

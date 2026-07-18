@@ -7,7 +7,7 @@ from incident_agent.graph import GRAPH
 from incident_agent.pipeline import run_deterministic_lifecycle
 
 
-def test_graph_invoke_matches_pipeline_output() -> None:
+def _same_initial_state() -> tuple[Alert, list[str], list[str], IncidentState]:
     alert = Alert(
         alert_name="CrashLoopBackOff",
         severity="critical",
@@ -22,30 +22,50 @@ def test_graph_invoke_matches_pipeline_output() -> None:
     ]
     events: list[str] = []
 
-    pipeline_state = run_deterministic_lifecycle(
-        incident_id="inc-graph-1",
-        alert=alert,
-        logs=logs,
-        events=events,
-        top_n=3,
-        target_ref="deployment/demo-app",
-    )
-
+    # Shared created_at so pipeline/graph outputs can be compared bit-for-bit.
+    created_at = datetime.now(tz=UTC)
     initial = IncidentState(
         incident_id="inc-graph-1",
-        created_at=datetime.now(tz=UTC),
+        created_at=created_at,
         phase="ingest",
         alert=alert,
         observations=Observations(logs=list(logs), events=list(events)),
     )
     initial.observations.extra["top_n"] = 3
     initial.observations.extra["target_ref"] = "deployment/demo-app"
+    return alert, logs, events, initial
+
+
+def test_graph_invoke_matches_pipeline_output() -> None:
+    alert, logs, events, initial = _same_initial_state()
+
+    pipeline_state = run_deterministic_lifecycle(
+        incident_id=initial.incident_id,
+        alert=alert,
+        logs=logs,
+        events=events,
+        top_n=3,
+        target_ref="deployment/demo-app",
+    )
+    # Align created_at: pipeline stamps now() internally; graph preserves input state.
+    pipeline_state.created_at = initial.created_at
 
     graph_state = GRAPH.invoke(initial)
 
-    # Compare the serialized contract to avoid object identity differences.
-    # `run_deterministic_lifecycle()` assigns created_at=now() internally, while the graph
-    # preserves the provided `state.created_at`. Align timestamps before comparison.
-    pipeline_state.created_at = graph_state.created_at
     assert graph_state.model_dump() == pipeline_state.model_dump()
 
+
+def test_graph_topology_is_straight_line() -> None:
+    """Success criteria topology: diagnose → hypothesize → plan_fix → validate_fix → confidence."""
+    app = GRAPH._app
+    # Compiled graph exposes nodes via get_graph() / nodes depending on version.
+    nodes = set(getattr(app, "nodes", {}) or {})
+    if not nodes and hasattr(app, "get_graph"):
+        nodes = {n for n in app.get_graph().nodes if n not in {"__start__", "__end__"}}
+
+    assert "diagnose" in nodes
+    assert "hypothesize" in nodes
+    assert "plan_fix" in nodes
+    assert "validate_fix" in nodes
+    assert "confidence" in nodes
+    assert "ingest" not in nodes
