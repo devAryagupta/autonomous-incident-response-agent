@@ -7,9 +7,10 @@ We’re building this project **progressively in stages** following the plan in:
 
 - Project skeleton + **synthetic incident dataset** for the first incident class:
   **Kubernetes `CrashLoopBackOff`**.
-- Deterministic reasoning lifecycle + **LangGraph straight-line orchestration**
-  (`START → diagnose → hypothesize → plan_fix → validate_fix → confidence → END`).
-  Success criterion: `GRAPH.invoke(state)` matches `run_deterministic_lifecycle()`.
+- Deterministic reasoning lifecycle + **LangGraph orchestration** with confidence replan.
+- **Provider architecture** (Observation / Metrics / Execution / Memory) so nodes stay
+  source-agnostic. Stage-0 backends: Synthetic + DryRun + NoMemory.
+  Later swaps (no node changes): Kubernetes / Prometheus / Kubectl / Chroma.
 
 ## Quickstart
 

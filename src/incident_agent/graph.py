@@ -1,7 +1,13 @@
 from __future__ import annotations
 
+from typing import Any
+
+from langchain_core.runnables import RunnableConfig
+
 from incident_agent.contracts import IncidentState
 from incident_agent.nodes import compute_confidence, diagnose, hypothesize, plan_fix, validate_fix
+from incident_agent.nodes.enrich import enrich
+from incident_agent.providers import PROVIDERS_CONFIG_KEY, ProviderBundle, default_providers
 from incident_agent.routing import bump_replan, finalize, route_on_confidence
 
 try:
@@ -13,10 +19,25 @@ except Exception as e:  # pragma: no cover
     ) from e
 
 
-def _with_phase(*, phase: str, fn):
-    """Wrap a node so it returns a partial state update and sets `phase`."""
+def _config_from_runnable(config: RunnableConfig | None) -> dict[str, Any] | None:
+    if config is None:
+        return None
+    if isinstance(config, dict):
+        return dict(config)
+    try:
+        return dict(config)
+    except Exception:
+        return None
 
-    def _wrapped(state: IncidentState) -> dict[str, object]:
+
+def _with_phase(*, phase: str, fn):
+    """Wrap a pure reasoning node (state → partial update) and set phase."""
+
+    def _wrapped(
+        state: IncidentState,
+        config: RunnableConfig | None = None,
+    ) -> dict[str, object]:
+        _ = config
         updates = dict(fn(state))
         updates["phase"] = phase
         return updates
@@ -24,32 +45,54 @@ def _with_phase(*, phase: str, fn):
     return _wrapped
 
 
-def confidence(state: IncidentState) -> dict[str, object]:
-    """Score confidence; routing decides whether to replan or finalize."""
+def _enrich_node(
+    state: IncidentState,
+    config: RunnableConfig | None = None,
+) -> dict[str, object]:
+    return enrich(state, config=_config_from_runnable(config))
+
+
+def _confidence_node(
+    state: IncidentState,
+    config: RunnableConfig | None = None,
+) -> dict[str, object]:
+    _ = config
     updates = dict(compute_confidence(state))
     updates["phase"] = "score_confidence"
     return updates
 
 
+def _finalize_node(
+    state: IncidentState,
+    config: RunnableConfig | None = None,
+) -> dict[str, object]:
+    return finalize(state, config=_config_from_runnable(config))
+
+
 def build_graph():
     """
-    Conditional LangGraph orchestration with a confidence replan loop.
+    Provider-aware LangGraph with confidence replan loop.
 
-    START -> diagnose -> hypothesize -> plan_fix -> validate_fix -> confidence
+    START -> enrich -> diagnose -> hypothesize -> plan_fix -> validate_fix -> confidence
       ├── high confidence / max retries → finalize → END
       └── low confidence & retries left → replan → hypothesize ↺
+
+    Providers are injected via:
+      invoke(state, config={"configurable": {"providers": ProviderBundle(...)}})
     """
     g = StateGraph(IncidentState)
 
+    g.add_node("enrich", _enrich_node)
     g.add_node("diagnose", _with_phase(phase="diagnose", fn=diagnose))
     g.add_node("hypothesize", _with_phase(phase="hypothesize", fn=hypothesize))
     g.add_node("plan_fix", _with_phase(phase="plan_fix", fn=plan_fix))
     g.add_node("validate_fix", _with_phase(phase="validate_fix", fn=validate_fix))
-    g.add_node("confidence", confidence)
+    g.add_node("confidence", _confidence_node)
     g.add_node("replan", bump_replan)
-    g.add_node("finalize", finalize)
+    g.add_node("finalize", _finalize_node)
 
-    g.add_edge(START, "diagnose")
+    g.add_edge(START, "enrich")
+    g.add_edge("enrich", "diagnose")
     g.add_edge("diagnose", "hypothesize")
     g.add_edge("hypothesize", "plan_fix")
     g.add_edge("plan_fix", "validate_fix")
@@ -72,11 +115,21 @@ def build_graph():
 class IncidentStateGraph:
     """Thin wrapper so `invoke()` always returns an `IncidentState` contract."""
 
-    def __init__(self, app) -> None:
+    def __init__(self, app, *, providers: ProviderBundle | None = None) -> None:
         self._app = app
+        self._providers = providers or default_providers()
 
-    def invoke(self, state: IncidentState) -> IncidentState:
-        out = self._app.invoke(state)
+    def invoke(
+        self,
+        state: IncidentState,
+        *,
+        providers: ProviderBundle | None = None,
+    ) -> IncidentState:
+        bundle = providers or self._providers
+        out = self._app.invoke(
+            state,
+            config={"configurable": {PROVIDERS_CONFIG_KEY: bundle}},
+        )
         if isinstance(out, IncidentState):
             return out
         return IncidentState.model_validate(out)

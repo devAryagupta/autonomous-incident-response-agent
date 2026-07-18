@@ -135,8 +135,8 @@ def test_pipeline_and_graph_parity_with_replan_loop() -> None:
         target_ref="deployment/demo-app",
         max_replans=2,
         confidence_threshold=0.99,
+        created_at=created_at,
     )
-    pipeline_state.created_at = created_at
 
     initial = IncidentState(
         incident_id="inc-parity-loop",

@@ -208,6 +208,8 @@ class IncidentState(ContractBase):
     validation_verdict: ValidationVerdict | None = None
     confidence: ConfidenceScore | None = None
     confidence_score: float | None = None
+    # MemoryProvider output (empty under NoMemory)
+    similar_incidents: list[dict[str, Any]] = Field(default_factory=list)
     approval: Approval | None = None
     execution: ExecutionResult | None = None
 

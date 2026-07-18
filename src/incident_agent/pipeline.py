@@ -8,6 +8,8 @@ from incident_agent.contracts import (
     Observations,
 )
 from incident_agent.nodes import compute_confidence, diagnose, hypothesize, plan_fix, validate_fix
+from incident_agent.nodes.enrich import enrich
+from incident_agent.providers import ProviderBundle, default_providers
 from incident_agent.routing import bump_replan, finalize, route_on_confidence
 
 
@@ -40,16 +42,17 @@ def run_deterministic_lifecycle(
     target_ref: str = "<workload>",
     max_replans: int | None = None,
     confidence_threshold: float | None = None,
+    providers: ProviderBundle | None = None,
+    created_at: datetime | None = None,
 ) -> IncidentState:
     """
-    Execute the deterministic incident lifecycle (no LangGraph, no LLM, no I/O).
+    Execute the deterministic incident lifecycle (no LangGraph, no LLM, no live I/O).
 
-    Flow (mirrors GRAPH routing):
-      Incident -> Diagnose -> Hypothesize -> Plan Fix -> Validate Fix -> Confidence
-        ├── high confidence / max retries → done
-        └── low confidence & retries left → replan → Hypothesize ↺
+    Providers are injected the same way as GRAPH (defaults = synthetic/dry-run/no-memory).
     """
-    now = datetime.now(tz=UTC)
+    bundle = providers or default_providers()
+
+    now = created_at or datetime.now(tz=UTC)
     state = IncidentState(
         incident_id=incident_id,
         created_at=now,
@@ -65,6 +68,8 @@ def run_deterministic_lifecycle(
     if max_replans is not None:
         state.max_replans = int(max_replans)
 
+    _apply(state, enrich(state, providers=bundle))
+
     state.phase = "diagnose"
     _apply(state, diagnose(state))
 
@@ -74,7 +79,7 @@ def run_deterministic_lifecycle(
         if decision == "replan":
             _apply(state, bump_replan(state))
             continue
-        _apply(state, finalize(state))
+        _apply(state, finalize(state, providers=bundle))
         break
 
     return state

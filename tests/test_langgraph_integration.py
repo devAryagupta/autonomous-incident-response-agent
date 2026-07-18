@@ -49,9 +49,8 @@ def test_graph_invoke_matches_pipeline_output() -> None:
         top_n=3,
         target_ref="deployment/demo-app",
         confidence_threshold=0.0,
+        created_at=initial.created_at,
     )
-    # Align created_at: pipeline stamps now() internally; graph preserves input state.
-    pipeline_state.created_at = initial.created_at
 
     graph_state = GRAPH.invoke(initial)
 
@@ -59,12 +58,13 @@ def test_graph_invoke_matches_pipeline_output() -> None:
 
 
 def test_graph_topology_has_conditional_replan() -> None:
-    """Topology: diagnose → … → confidence ⇄ replan → hypothesize; confidence → finalize → END."""
+    """Topology: enrich → diagnose → … → confidence ⇄ replan; confidence → finalize → END."""
     app = GRAPH._app
     nodes = set(getattr(app, "nodes", {}) or {})
     if not nodes and hasattr(app, "get_graph"):
         nodes = {n for n in app.get_graph().nodes if n not in {"__start__", "__end__"}}
 
+    assert "enrich" in nodes
     assert "diagnose" in nodes
     assert "hypothesize" in nodes
     assert "plan_fix" in nodes
@@ -72,4 +72,4 @@ def test_graph_topology_has_conditional_replan() -> None:
     assert "confidence" in nodes
     assert "replan" in nodes
     assert "finalize" in nodes
-    assert "ingest" not in nodes
+

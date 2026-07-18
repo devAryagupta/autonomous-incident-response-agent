@@ -56,8 +56,15 @@ def bump_replan(state: IncidentState) -> dict[str, object]:
     }
 
 
-def finalize(state: IncidentState) -> dict[str, object]:
-    """Terminal node before END: mark lifecycle done."""
+def finalize(
+    state: IncidentState,
+    *,
+    providers=None,
+    config: dict | None = None,
+) -> dict[str, object]:
+    """Terminal node before END: mark lifecycle done (+ optional dry-run execution)."""
+    from incident_agent.providers import resolve_providers
+
     route = "end"
     log = list(state.log)
     score = get_confidence_score(state)
@@ -69,4 +76,15 @@ def finalize(state: IncidentState) -> dict[str, object]:
             f"finalize: max_replans_reached count={state.replan_count}/{state.max_replans} "
             f"score={score:.3f}"
         )
-    return {"phase": "done", "route": route, "log": log}
+
+    updates: dict[str, object] = {"phase": "done", "route": route, "log": log}
+
+    # Stage-0: always dry-run via ExecutionProvider (no live cluster I/O).
+    if state.fix_plan is not None:
+        bundle = providers or resolve_providers(config)
+        execution = bundle.execution.execute(state.fix_plan, state=state)
+        updates["execution"] = execution
+        log.append(f"finalize: execution_provider={type(bundle.execution).__name__}")
+        updates["log"] = log
+
+    return updates
