@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from incident_agent.contracts import IncidentState, Observations
+from incident_agent.contracts import IncidentState
 from incident_agent.nodes import compute_confidence, diagnose, hypothesize, plan_fix, validate_fix
+from incident_agent.routing import bump_replan, finalize, route_on_confidence
 
 try:
     from langgraph.graph import END, START, StateGraph
@@ -24,17 +25,19 @@ def _with_phase(*, phase: str, fn):
 
 
 def confidence(state: IncidentState) -> dict[str, object]:
-    """Final node: score confidence and mark the lifecycle done."""
+    """Score confidence; routing decides whether to replan or finalize."""
     updates = dict(compute_confidence(state))
-    updates["phase"] = "done"
+    updates["phase"] = "score_confidence"
     return updates
 
 
 def build_graph():
     """
-    Straight-line LangGraph orchestration.
+    Conditional LangGraph orchestration with a confidence replan loop.
 
-    START -> diagnose -> hypothesize -> plan_fix -> validate_fix -> confidence -> END
+    START -> diagnose -> hypothesize -> plan_fix -> validate_fix -> confidence
+      ├── high confidence / max retries → finalize → END
+      └── low confidence & retries left → replan → hypothesize ↺
     """
     g = StateGraph(IncidentState)
 
@@ -43,13 +46,25 @@ def build_graph():
     g.add_node("plan_fix", _with_phase(phase="plan_fix", fn=plan_fix))
     g.add_node("validate_fix", _with_phase(phase="validate_fix", fn=validate_fix))
     g.add_node("confidence", confidence)
+    g.add_node("replan", bump_replan)
+    g.add_node("finalize", finalize)
 
     g.add_edge(START, "diagnose")
     g.add_edge("diagnose", "hypothesize")
     g.add_edge("hypothesize", "plan_fix")
     g.add_edge("plan_fix", "validate_fix")
     g.add_edge("validate_fix", "confidence")
-    g.add_edge("confidence", END)
+
+    g.add_conditional_edges(
+        "confidence",
+        route_on_confidence,
+        {
+            "end": "finalize",
+            "replan": "replan",
+        },
+    )
+    g.add_edge("replan", "hypothesize")
+    g.add_edge("finalize", END)
 
     return g.compile()
 

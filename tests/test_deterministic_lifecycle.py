@@ -22,6 +22,8 @@ def test_complete_deterministic_lifecycle_runs() -> None:
         ],
         top_n=3,
         target_ref="deployment/demo-app",
+        # Stage-0 lifecycle smoke test stays on the single-pass path.
+        confidence_threshold=0.0,
     )
 
     assert state.diagnosis is not None

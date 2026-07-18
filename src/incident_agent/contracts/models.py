@@ -169,6 +169,7 @@ IncidentPhase = Literal[
     "plan_fix",
     "validate_fix",
     "score_confidence",
+    "replan",
     "approve",
     "execute",
     "done",
@@ -210,9 +211,9 @@ class IncidentState(ContractBase):
     approval: Approval | None = None
     execution: ExecutionResult | None = None
 
-    # operational control
+    # operational control (confidence replan loop)
     replan_count: int = 0
-    max_replans: int = 3
+    max_replans: int = 2
 
     # debug/trace
     log: list[str] = Field(default_factory=list)

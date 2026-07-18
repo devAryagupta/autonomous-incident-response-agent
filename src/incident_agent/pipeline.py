@@ -8,6 +8,7 @@ from incident_agent.contracts import (
     Observations,
 )
 from incident_agent.nodes import compute_confidence, diagnose, hypothesize, plan_fix, validate_fix
+from incident_agent.routing import bump_replan, finalize, route_on_confidence
 
 
 def _apply(state: IncidentState, updates: dict[str, object]) -> None:
@@ -15,36 +16,7 @@ def _apply(state: IncidentState, updates: dict[str, object]) -> None:
         setattr(state, k, v)
 
 
-def run_deterministic_lifecycle(
-    *,
-    incident_id: str,
-    alert: Alert,
-    logs: list[str],
-    events: list[str] | None = None,
-    top_n: int = 3,
-    target_ref: str = "<workload>",
-) -> IncidentState:
-    """
-    Execute the complete deterministic incident lifecycle (no LangGraph, no LLM, no I/O).
-
-    Flow:
-      Incident -> Diagnose -> Hypothesize -> Plan Fix -> Validate Fix -> Score Confidence
-    """
-    now = datetime.now(tz=UTC)
-    state = IncidentState(
-        incident_id=incident_id,
-        created_at=now,
-        phase="ingest",
-        alert=alert,
-        observations=Observations(logs=list(logs), events=list(events or [])),
-    )
-    # config values required by state-based nodes
-    state.observations.extra["top_n"] = int(top_n)
-    state.observations.extra["target_ref"] = str(target_ref)
-
-    state.phase = "diagnose"
-    _apply(state, diagnose(state))
-
+def _run_plan_validate_score(state: IncidentState) -> None:
     state.phase = "hypothesize"
     _apply(state, hypothesize(state))
 
@@ -57,6 +29,52 @@ def run_deterministic_lifecycle(
     state.phase = "score_confidence"
     _apply(state, compute_confidence(state))
 
-    state.phase = "done"
-    return state
 
+def run_deterministic_lifecycle(
+    *,
+    incident_id: str,
+    alert: Alert,
+    logs: list[str],
+    events: list[str] | None = None,
+    top_n: int = 3,
+    target_ref: str = "<workload>",
+    max_replans: int | None = None,
+    confidence_threshold: float | None = None,
+) -> IncidentState:
+    """
+    Execute the deterministic incident lifecycle (no LangGraph, no LLM, no I/O).
+
+    Flow (mirrors GRAPH routing):
+      Incident -> Diagnose -> Hypothesize -> Plan Fix -> Validate Fix -> Confidence
+        ├── high confidence / max retries → done
+        └── low confidence & retries left → replan → Hypothesize ↺
+    """
+    now = datetime.now(tz=UTC)
+    state = IncidentState(
+        incident_id=incident_id,
+        created_at=now,
+        phase="ingest",
+        alert=alert,
+        observations=Observations(logs=list(logs), events=list(events or [])),
+    )
+    # config values required by state-based nodes / routing
+    state.observations.extra["top_n"] = int(top_n)
+    state.observations.extra["target_ref"] = str(target_ref)
+    if confidence_threshold is not None:
+        state.observations.extra["confidence_threshold"] = float(confidence_threshold)
+    if max_replans is not None:
+        state.max_replans = int(max_replans)
+
+    state.phase = "diagnose"
+    _apply(state, diagnose(state))
+
+    while True:
+        _run_plan_validate_score(state)
+        decision = route_on_confidence(state)
+        if decision == "replan":
+            _apply(state, bump_replan(state))
+            continue
+        _apply(state, finalize(state))
+        break
+
+    return state
