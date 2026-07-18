@@ -33,6 +33,8 @@ def _same_initial_state() -> tuple[Alert, list[str], list[str], IncidentState]:
     )
     initial.observations.extra["top_n"] = 3
     initial.observations.extra["target_ref"] = "deployment/demo-app"
+    # Keep this parity test on the single-pass happy path (no replan loop).
+    initial.observations.extra["confidence_threshold"] = 0.0
     return alert, logs, events, initial
 
 
@@ -46,26 +48,28 @@ def test_graph_invoke_matches_pipeline_output() -> None:
         events=events,
         top_n=3,
         target_ref="deployment/demo-app",
+        confidence_threshold=0.0,
+        created_at=initial.created_at,
     )
-    # Align created_at: pipeline stamps now() internally; graph preserves input state.
-    pipeline_state.created_at = initial.created_at
 
     graph_state = GRAPH.invoke(initial)
 
     assert graph_state.model_dump() == pipeline_state.model_dump()
 
 
-def test_graph_topology_is_straight_line() -> None:
-    """Success criteria topology: diagnose → hypothesize → plan_fix → validate_fix → confidence."""
+def test_graph_topology_has_conditional_replan() -> None:
+    """Topology: enrich → diagnose → … → confidence ⇄ replan; confidence → finalize → END."""
     app = GRAPH._app
-    # Compiled graph exposes nodes via get_graph() / nodes depending on version.
     nodes = set(getattr(app, "nodes", {}) or {})
     if not nodes and hasattr(app, "get_graph"):
         nodes = {n for n in app.get_graph().nodes if n not in {"__start__", "__end__"}}
 
+    assert "enrich" in nodes
     assert "diagnose" in nodes
     assert "hypothesize" in nodes
     assert "plan_fix" in nodes
     assert "validate_fix" in nodes
     assert "confidence" in nodes
-    assert "ingest" not in nodes
+    assert "replan" in nodes
+    assert "finalize" in nodes
+

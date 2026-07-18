@@ -169,6 +169,7 @@ IncidentPhase = Literal[
     "plan_fix",
     "validate_fix",
     "score_confidence",
+    "replan",
     "approve",
     "execute",
     "done",
@@ -207,12 +208,14 @@ class IncidentState(ContractBase):
     validation_verdict: ValidationVerdict | None = None
     confidence: ConfidenceScore | None = None
     confidence_score: float | None = None
+    # MemoryProvider output (empty under NoMemory)
+    similar_incidents: list[dict[str, Any]] = Field(default_factory=list)
     approval: Approval | None = None
     execution: ExecutionResult | None = None
 
-    # operational control
+    # operational control (confidence replan loop)
     replan_count: int = 0
-    max_replans: int = 3
+    max_replans: int = 2
 
     # debug/trace
     log: list[str] = Field(default_factory=list)

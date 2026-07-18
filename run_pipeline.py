@@ -2,10 +2,9 @@ from __future__ import annotations
 
 import argparse
 
-from incident_agent.contracts import Alert
+from incident_agent.contracts import Alert, IncidentState, Observations
 from incident_agent.datasets.core import load_jsonl
 from incident_agent.datasets.crashloopbackoff.schema import CrashLoopBackOffIncident
-from incident_agent.contracts import IncidentState, Observations
 from incident_agent.graph import GRAPH
 
 
