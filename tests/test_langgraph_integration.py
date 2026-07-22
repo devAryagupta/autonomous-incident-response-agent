@@ -67,6 +67,8 @@ def test_graph_topology_has_conditional_replan() -> None:
     assert "enrich" in nodes
     assert "diagnose" in nodes
     assert "hypothesize" in nodes
+    assert "collect_evidence" in nodes
+    assert "verify_hypotheses" in nodes
     assert "plan_fix" in nodes
     assert "validate_fix" in nodes
     assert "confidence" in nodes
