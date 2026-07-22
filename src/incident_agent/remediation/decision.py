@@ -207,7 +207,6 @@ def decide_remediation(state: IncidentState) -> RemediationDecision:
     viable = [pair for pair in ranked_all if pair[0].confidence >= _MIN_VIABLE_CONFIDENCE]
     ranked = viable if viable else ranked_all
 
-    options = [opt for opt, _ in ranked_all]
     # Re-order displayed options: chosen family first by decision rank among viable,
     # then remaining by global safety (still show low-confidence alternatives).
     chosen_ids = {opt.option_id for opt, _ in ranked}
