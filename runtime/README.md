@@ -2,6 +2,10 @@
 
 Agent **runtime data** lives here — not under `src/`.
 
+Stage 0 does not write here yet by default (providers are in-memory / dry-run).
+The layout is reserved so later memory dumps, checkpoints, and run logs have a
+fixed home outside the package tree.
+
 | Subfolder | Purpose |
 |-----------|---------|
 | `logs/` | Run / debug logs |
@@ -9,7 +13,11 @@ Agent **runtime data** lives here — not under `src/`.
 | `state/` | Checkpoints / persisted incident state |
 | `artifacts/` | Ad-hoc outputs from local runs |
 
-These paths are gitignored. Do not commit secrets or large dumps.
+Related output dirs elsewhere (also gitignored):
 
-Source code, prompts, and schemas belong under `src/incident_agent/` only.
-See [docs/CODING_PRINCIPLES.md](../docs/CODING_PRINCIPLES.md) §5.
+- `data/synthetic/` — generated CrashLoop JSONL from the dataset CLI  
+- `artifacts/` — benchmark `predictions.*.jsonl` / `report.*.json`  
+
+Do not commit secrets or large dumps. Product source stays under `src/incident_agent/`.
+
+See [docs/CODING_PRINCIPLES.md](../docs/CODING_PRINCIPLES.md) §5 and the root [README.md](../README.md).

@@ -7,7 +7,9 @@ By submitting a change, you agree to follow the same structure and coding format
 ## Required reading
 
 1. **[docs/CODING_PRINCIPLES.md](docs/CODING_PRINCIPLES.md)** — architecture layers, naming, size limits, SoC, runtime vs source  
-2. **[README.md](README.md)** — Stage-0 scope, quickstart, benchmarks  
+2. **[README.md](README.md)** — **current** Stage-0 architecture, what’s implemented vs stubbed, quickstart  
+
+If you add a feature (new node, provider, CLI, metric), update the root README in the same PR so docs stay aligned with `src/`.
 
 If a PR violates those principles (wrong layer, `utils/` dump, runtime files under `src/`, cryptic names), it will be asked to change before merge.
 

@@ -1,12 +1,15 @@
 # Progress Report 1 — Autonomous Incident-Response Agent
 
+> **Historical snapshot.** Written for the codebase as of ~18 July 2026 / commit era through `0d453ae` (and early `IncidentState` work).  
+> **For the live codebase**, use the root [README.md](README.md) — it includes providers, `enrich`, confidence replan, coding standards, and current stubs.  
+> Do not treat sections below as the full current architecture.
+
 **Report date:** 18 July 2026  
 **Package:** `incident-response-agent` v0.1.0  
-**Current stage:** Stage 0 — skeleton, synthetic CrashLoopBackOff dataset, deterministic agent lifecycle  
-**Active branch:** `IncidentState` (ahead of `main` by the pipeline/LangGraph enhancements commit)  
-**Working tree:** clean (all work committed)
+**Stage at report time:** Stage 0 — skeleton, synthetic CrashLoopBackOff dataset, deterministic agent lifecycle  
+**Branch at report time:** `IncidentState`
 
-This document captures architecture, decisions, git history, what is implemented, what is stubbed, and what comes next — based on the repository state and local commit history through `0d453ae`.
+This document captured architecture, decisions, and git history through `0d453ae` at the time it was written.
 
 ---
 
