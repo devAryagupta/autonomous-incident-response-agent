@@ -128,9 +128,34 @@ class RiskLevel(StrEnum):
     HIGH = "high"
 
 
+ImpactLevel = Literal["low", "medium", "high"]
+
+
+class RemediationOption(ContractBase):
+    """Candidate safe action (decision only — not executed yet)."""
+
+    schema_version: SchemaVersion = "1"
+    option_id: str
+    action: str
+    expected_effect: str
+    risk: RiskLevel = RiskLevel.MEDIUM
+    # How widely the change can affect other workloads / cluster state.
+    blast_radius: ImpactLevel = "low"
+    # Ability to undo the action cleanly.
+    reversibility: ImpactLevel = "medium"
+    # Whether a clean automated recovery path exists.
+    rollback_possible: bool = True
+    confidence: float = Field(ge=0.0, le=1.0, default=0.5)
+    # Composite safety score used for ranking (higher = safer/better).
+    safety_score: float = Field(ge=0.0, le=1.0, default=0.0)
+    hypothesis_id: str | None = None
+    rationale: str = ""
+
+
 class FixPlan(ContractBase):
     schema_version: SchemaVersion = "1"
     hypothesis_id: str | None = None
+    remediation_option_id: str | None = None
     actions: list[FixAction] = Field(default_factory=list)
     risk: RiskLevel = Field(default=RiskLevel.LOW)
     notes: str | None = None
@@ -257,6 +282,8 @@ class IncidentState(ContractBase):
     evidence_results: list[EvidenceResult] = Field(default_factory=list)
     hypothesis_verifications: list[HypothesisVerification] = Field(default_factory=list)
     chosen_hypothesis_id: str | None = None
+    remediation_options: list[RemediationOption] = Field(default_factory=list)
+    chosen_remediation_id: str | None = None
     fix_plan: FixPlan | None = None
     validation: list[ValidationResult] = Field(default_factory=list)
     validation_verdict: ValidationVerdict | None = None

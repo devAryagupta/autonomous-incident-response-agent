@@ -77,6 +77,19 @@ def _print_one(incident: CrashLoopBackOffIncident) -> None:
                 print(f"  observed: {', '.join(v.observed_evidence)}")
         print()
 
+    if state.remediation_options:
+        print("Remediation Options:")
+        for i, opt in enumerate(state.remediation_options, start=1):
+            marker = " (chosen)" if opt.option_id == state.chosen_remediation_id else ""
+            print(f"{i}. {opt.action}{marker}")
+            print(f"   effect: {opt.expected_effect}")
+            print(
+                f"   risk={opt.risk.value} blast_radius={opt.blast_radius} "
+                f"reversibility={opt.reversibility} rollback_possible={opt.rollback_possible}"
+            )
+            print(f"   confidence={opt.confidence:.2f} safety_score={opt.safety_score:.2f}")
+        print()
+
     print("Fix Plan:")
     if state.fix_plan and state.fix_plan.actions:
         print(f"Risk: {state.fix_plan.risk.value}")
