@@ -3,6 +3,15 @@
 We’re building this project **progressively in stages** following the plan in:
 `C:\Users\ag551\.claude\plans\https-github-com-madhurprash-langgraph-a-velvety-peacock.md`.
 
+## Contributing & coding standards
+
+Before changing code, read:
+
+- **[CONTRIBUTING.md](CONTRIBUTING.md)** — setup, checks, where to put new code, PR checklist
+- **[docs/CODING_PRINCIPLES.md](docs/CODING_PRINCIPLES.md)** — layered architecture, naming, size limits, SoC, runtime vs source
+
+Cursor agents also load `.cursor/rules/` (architecture + Python style). Runtime data belongs under `runtime/`, not `src/`.
+
 ## Stage 0 (current)
 
 - Project skeleton + **synthetic incident dataset** for the first incident class:

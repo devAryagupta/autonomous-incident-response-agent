@@ -35,3 +35,13 @@ Thumbs.db
 artifacts/
 data/synthetic/**/incidents.jsonl
 
+# Agent runtime data (logs / memory / state) — keep folder placeholders only
+runtime/logs/*
+!runtime/logs/.gitkeep
+runtime/memory/*
+!runtime/memory/.gitkeep
+runtime/state/*
+!runtime/state/.gitkeep
+runtime/artifacts/*
+!runtime/artifacts/.gitkeep
+

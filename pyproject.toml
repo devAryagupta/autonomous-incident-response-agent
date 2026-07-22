@@ -23,11 +23,18 @@ dev = [
 ]
 
 [tool.ruff]
+# Keep in sync with docs/CODING_PRINCIPLES.md (line length ≤ 100).
 line-length = 100
 target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "auto"
+docstring-code-format = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
