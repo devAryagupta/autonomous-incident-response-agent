@@ -1,10 +1,11 @@
-def test_diagnose_interface_is_stable() -> None:
-    from datetime import UTC, datetime
+from datetime import UTC, datetime
 
-    from incident_agent.contracts import Alert, IncidentState, Observations
-    from incident_agent.nodes.diagnose import diagnose
+from incident_agent.contracts import Alert, IncidentState, Observations
+from incident_agent.nodes.diagnose import diagnose
 
-    state = IncidentState(
+
+def _state(*, logs: list[str] | None = None, events: list[str] | None = None) -> IncidentState:
+    return IncidentState(
         incident_id="inc-1",
         created_at=datetime.now(tz=UTC),
         alert=Alert(
@@ -12,10 +13,91 @@ def test_diagnose_interface_is_stable() -> None:
             severity="critical",
             starts_at=datetime.now(tz=UTC),
         ),
-        observations=Observations(logs=["anything"], events=[]),
+        observations=Observations(logs=logs or [], events=events or []),
     )
-    updates = diagnose(state)
-    out = updates["diagnosis"]
-    assert out.summary == "Invalid image tag"  # type: ignore[attr-defined]
-    assert 0.0 <= out.confidence <= 1.0  # type: ignore[attr-defined]
 
+
+def test_diagnose_interface_returns_diagnosis() -> None:
+    updates = diagnose(_state(logs=["anything"], events=[]))
+    out = updates["diagnosis"]
+    assert out.category == "Unknown"
+    assert out.summary
+    assert 0.0 <= out.confidence <= 1.0
+    assert isinstance(out.evidence, list)
+
+
+def test_diagnose_oomkilled_from_exit_code_and_event() -> None:
+    updates = diagnose(
+        _state(
+            events=["Warning  OOMKilled  kubelet  Container killed due to OOM"],
+            logs=["OOMKilled: Container was killed due to memory usage", "exit status 137"],
+        )
+    )
+    out = updates["diagnosis"]
+    assert out.category == "OOMKilled"
+    assert out.confidence >= 0.85
+    texts = [e.text for e in out.evidence]
+    assert any("137" in t for t in texts)
+    assert any("OOMKilled" in t for t in texts)
+
+
+def test_diagnose_invalid_image_from_errimagepull() -> None:
+    updates = diagnose(
+        _state(
+            events=[
+                'Warning  Failed  kubelet  Error: ErrImagePull',
+                'Warning  Failed  kubelet  Error: ImagePullBackOff',
+                'manifest unknown: manifest unknown',
+            ],
+            logs=["FATAL: container start aborted (image pull error)"],
+        )
+    )
+    out = updates["diagnosis"]
+    assert out.category == "Invalid Image"
+    assert out.confidence >= 0.85
+    assert out.evidence
+
+
+def test_diagnose_missing_secret() -> None:
+    updates = diagnose(
+        _state(
+            events=[
+                'Warning  FailedMount kubelet  MountVolume.SetUp failed for volume '
+                '"secret": secret "db-credentials" not found',
+            ],
+            logs=["FATAL: could not load credentials from /etc/secrets/creds.json"],
+        )
+    )
+    out = updates["diagnosis"]
+    assert out.category == "Missing Secret"
+    assert out.confidence >= 0.8
+    assert any("secret" in e.text.lower() for e in out.evidence)
+
+
+def test_diagnose_application_crash_from_traceback() -> None:
+    updates = diagnose(
+        _state(
+            events=["Warning  BackOff  kubelet  Back-off restarting failed container"],
+            logs=[
+                "Traceback (most recent call last):",
+                "Exception: Unhandled exception at startup",
+                "exit status 1",
+            ],
+        )
+    )
+    out = updates["diagnosis"]
+    assert out.category == "Application Crash"
+    assert out.confidence >= 0.7
+    assert out.evidence
+
+
+def test_diagnose_is_deterministic() -> None:
+    state = _state(
+        events=["Warning  OOMKilled  kubelet  Container killed due to OOM"],
+        logs=["exit code 137"],
+    )
+    a = diagnose(state)["diagnosis"]
+    b = diagnose(state)["diagnosis"]
+    assert a.category == b.category == "OOMKilled"
+    assert a.confidence == b.confidence
+    assert [e.text for e in a.evidence] == [e.text for e in b.evidence]

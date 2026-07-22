@@ -44,6 +44,7 @@ class Evidence(ContractBase):
 class Diagnosis(ContractBase):
     schema_version: SchemaVersion = "1"
     summary: str
+    category: str = "Unknown"
     confidence: float = Field(ge=0.0, le=1.0)
     evidence: list[Evidence] = Field(default_factory=list)
 
