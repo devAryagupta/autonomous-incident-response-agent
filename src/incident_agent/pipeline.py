@@ -8,6 +8,7 @@ from incident_agent.contracts import (
     Observations,
 )
 from incident_agent.nodes import (
+    collect_evidence,
     compute_confidence,
     diagnose,
     hypothesize,
@@ -25,9 +26,12 @@ def _apply(state: IncidentState, updates: dict[str, object]) -> None:
         setattr(state, k, v)
 
 
-def _run_plan_validate_score(state: IncidentState) -> None:
+def _run_plan_validate_score(state: IncidentState, *, providers: ProviderBundle) -> None:
     state.phase = "hypothesize"
     _apply(state, hypothesize(state))
+
+    state.phase = "collect_evidence"
+    _apply(state, collect_evidence(state, providers=providers))
 
     state.phase = "verify_hypotheses"
     _apply(state, verify_hypotheses(state))
@@ -84,7 +88,7 @@ def run_deterministic_lifecycle(
     _apply(state, diagnose(state))
 
     while True:
-        _run_plan_validate_score(state)
+        _run_plan_validate_score(state, providers=bundle)
         decision = route_on_confidence(state)
         if decision == "replan":
             _apply(state, bump_replan(state))

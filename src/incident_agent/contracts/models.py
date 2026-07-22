@@ -77,6 +77,34 @@ class HypothesisVerification(ContractBase):
     confidence_delta: float = 0.0
 
 
+EvidenceRequestType = Literal["metric", "log", "event", "describe"]
+
+
+class EvidenceRequest(ContractBase):
+    """Curiosity artifact: what the agent needs next to verify a hypothesis."""
+
+    schema_version: SchemaVersion = "1"
+    request_id: str
+    type: EvidenceRequestType
+    query: str
+    target: str
+    hypothesis_id: str | None = None
+    rationale: str = ""
+
+
+class EvidenceResult(ContractBase):
+    """Provider response for one EvidenceRequest (Stage-0 may be synthetic)."""
+
+    schema_version: SchemaVersion = "1"
+    request_id: str
+    type: EvidenceRequestType
+    query: str
+    target: str
+    success: bool = True
+    summary: str = ""
+    data: dict[str, Any] = Field(default_factory=dict)
+
+
 class FixActionType(StrEnum):
     RESTART_POD = "restart_pod"
     ROLLBACK_DEPLOYMENT = "rollback_deployment"
@@ -187,6 +215,7 @@ IncidentPhase = Literal[
     "ingest",
     "diagnose",
     "hypothesize",
+    "collect_evidence",
     "verify_hypotheses",
     "plan_fix",
     "validate_fix",
@@ -224,6 +253,8 @@ class IncidentState(ContractBase):
     observations: Observations = Field(default_factory=Observations)
     diagnosis: Diagnosis | None = None
     hypotheses: list[Hypothesis] = Field(default_factory=list)
+    evidence_requests: list[EvidenceRequest] = Field(default_factory=list)
+    evidence_results: list[EvidenceResult] = Field(default_factory=list)
     hypothesis_verifications: list[HypothesisVerification] = Field(default_factory=list)
     chosen_hypothesis_id: str | None = None
     fix_plan: FixPlan | None = None

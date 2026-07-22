@@ -8,7 +8,14 @@ from __future__ import annotations
 
 from typing import Any, Protocol, runtime_checkable
 
-from incident_agent.contracts import ExecutionResult, FixPlan, IncidentState, Observations
+from incident_agent.contracts import (
+    EvidenceRequest,
+    EvidenceResult,
+    ExecutionResult,
+    FixPlan,
+    IncidentState,
+    Observations,
+)
 
 
 @runtime_checkable
@@ -19,6 +26,15 @@ class ObservationProvider(Protocol):
         """Return observations for the incident (may enrich or pass through state)."""
         ...
 
+    def execute_evidence_request(
+        self,
+        request: EvidenceRequest,
+        *,
+        state: IncidentState,
+    ) -> EvidenceResult:
+        """Fulfill a log/event/describe EvidenceRequest."""
+        ...
+
 
 @runtime_checkable
 class MetricsProvider(Protocol):
@@ -26,6 +42,15 @@ class MetricsProvider(Protocol):
 
     def fetch_metrics(self, state: IncidentState) -> dict[str, Any]:
         """Return a metrics payload (PromQL-shaped or synthetic stub)."""
+        ...
+
+    def execute_evidence_request(
+        self,
+        request: EvidenceRequest,
+        *,
+        state: IncidentState,
+    ) -> EvidenceResult:
+        """Fulfill a metric EvidenceRequest (e.g. PromQL query)."""
         ...
 
 

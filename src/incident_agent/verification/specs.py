@@ -34,7 +34,7 @@ VERIFICATION_SPECS: dict[str, VerificationSpec] = {
             ),
         ),
         contradict_patterns=(
-            _rx(r"traffic spike|surge in requests|\brps\b|\bqps\b"),
+            _rx(r"traffic spike|surge in requests|rps=\d{3,}|high load"),
             _rx(r"single startup|only at startup"),
         ),
     ),
@@ -45,11 +45,11 @@ VERIFICATION_SPECS: dict[str, VerificationSpec] = {
         ),
         support_patterns=(
             _rx(r"startup|during start|init|insufficient memory"),
-            _rx(r"limit|requests/limits|memory limit"),
+            _rx(r"limit|requests/limits|memory limit|near memory limit"),
         ),
         contradict_patterns=(
-            _rx(r"gradual|grew|growth|leak|increased from"),
-            _rx(r"traffic spike|surge in requests|\brps\b|\bqps\b"),
+            _rx(r"gradual|grew|growth|leak|increased from \d+mi to"),
+            _rx(r"traffic spike|surge in requests|rps=\d{3,}"),
         ),
     ),
     "Traffic spike": VerificationSpec(
@@ -58,10 +58,10 @@ VERIFICATION_SPECS: dict[str, VerificationSpec] = {
             "Load-related memory pressure",
         ),
         support_patterns=(
-            _rx(r"traffic|spike|surge|\brps\b|\bqps\b|throughput|high load"),
+            _rx(r"traffic spike|surge|\brps=\d+|high load|throughput spike"),
         ),
         contradict_patterns=(
-            _rx(r"idle|no traffic|zero requests"),
+            _rx(r"request rate stable|no traffic|zero requests"),
         ),
     ),
     "Wrong image tag": VerificationSpec(

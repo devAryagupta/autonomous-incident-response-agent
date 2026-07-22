@@ -17,10 +17,9 @@ def enrich(
     """
     Provider-backed ingest/enrich.
 
-    Nodes downstream read only IncidentState. This is the sole place that
-    talks to ObservationProvider / MetricsProvider / MemoryProvider so that
-    Kubernetes/Prometheus/Chroma can swap in later without changing diagnose/
-    hypothesize/plan_fix/…
+    Nodes downstream read only IncidentState. Initial ingest talks to
+    ObservationProvider / MetricsProvider / MemoryProvider here; hypothesis-driven
+    follow-up fetches run in collect_evidence via the same provider protocols.
     """
     bundle = providers or resolve_providers(config)
 

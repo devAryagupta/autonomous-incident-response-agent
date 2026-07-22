@@ -3,6 +3,7 @@
 LangGraph wiring will come later; for now these are plain functions with stable interfaces.
 """
 
+from incident_agent.nodes.collect_evidence import collect_evidence
 from incident_agent.nodes.confidence_engine import compute_confidence
 from incident_agent.nodes.diagnose import diagnose
 from incident_agent.nodes.enrich import enrich
@@ -13,6 +14,7 @@ from incident_agent.nodes.validate_fix import validate_fix
 from incident_agent.nodes.verify_hypotheses import verify_hypotheses
 
 __all__ = [
+    "collect_evidence",
     "compute_confidence",
     "diagnose",
     "enrich",
