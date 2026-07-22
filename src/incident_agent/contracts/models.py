@@ -198,14 +198,45 @@ class Approval(ContractBase):
     at: datetime | None = None
 
 
+class ExecutionPlan(ContractBase):
+    """Intent for safe execution: preconditions, expected outcome, rollback."""
+
+    schema_version: SchemaVersion = "1"
+    action: str
+    target: str
+    preconditions: list[str] = Field(default_factory=list)
+    expected_outcome: list[str] = Field(default_factory=list)
+    rollback_action: str | None = None
+    hypothesis_id: str | None = None
+    remediation_option_id: str | None = None
+
+
+ExecutionStatus = Literal["success", "failed", "skipped", "dry_run_success"]
+
+
 class ExecutionResult(ContractBase):
     schema_version: SchemaVersion = "1"
     executed: bool
     success: bool
+    status: ExecutionStatus = "dry_run_success"
+    action: str = ""
+    applied_changes: list[str] = Field(default_factory=list)
     summary: str
     details: dict[str, Any] = Field(default_factory=dict)
     started_at: datetime | None = None
     finished_at: datetime | None = None
+
+
+class OutcomeVerification(ContractBase):
+    """Post-execution check: command success ≠ incident resolved."""
+
+    schema_version: SchemaVersion = "1"
+    resolved: bool
+    expected_outcome: list[str] = Field(default_factory=list)
+    observed_outcome: list[str] = Field(default_factory=list)
+    unmet_expectations: list[str] = Field(default_factory=list)
+    evidence_summaries: list[str] = Field(default_factory=list)
+    reason: str = ""
 
 
 class ResourceRef(ContractBase):
@@ -246,8 +277,11 @@ IncidentPhase = Literal[
     "validate_fix",
     "score_confidence",
     "replan",
+    "prepare_execution",
+    "pre_execute_validate",
     "approve",
     "execute",
+    "verify_outcome",
     "done",
 ]
 
@@ -291,8 +325,11 @@ class IncidentState(ContractBase):
     confidence_score: float | None = None
     # MemoryProvider output (empty under NoMemory)
     similar_incidents: list[dict[str, Any]] = Field(default_factory=list)
+    execution_plan: ExecutionPlan | None = None
     approval: Approval | None = None
     execution: ExecutionResult | None = None
+    outcome_verification: OutcomeVerification | None = None
+    incident_resolved: bool | None = None
 
     # operational control (confidence replan loop)
     replan_count: int = 0

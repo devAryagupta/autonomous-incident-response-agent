@@ -29,9 +29,10 @@ def route_on_confidence(state: IncidentState) -> RouteDecision:
     """
     Conditional router after the confidence node.
 
-    - High confidence (>= threshold) → end
+    - High confidence (>= threshold) → end (enter execution lifecycle)
     - Low confidence and replan_count < max_replans → replan
-    - Low confidence and retries exhausted → end (circuit breaker)
+    - Low confidence and retries exhausted → end (still enter execution gate;
+      prepare/approve may skip unsafe actions)
     """
     score = get_confidence_score(state)
     threshold = get_confidence_threshold(state)
@@ -62,29 +63,30 @@ def finalize(
     providers=None,
     config: dict | None = None,
 ) -> dict[str, object]:
-    """Terminal node before END: mark lifecycle done (+ optional dry-run execution)."""
-    from incident_agent.providers import resolve_providers
-
+    """Terminal node: mark lifecycle done (execution already ran upstream)."""
+    _ = providers, config
     route = "end"
     log = list(state.log)
     score = get_confidence_score(state)
     threshold = get_confidence_threshold(state)
-    if score >= threshold:
-        log.append(f"finalize: high_confidence score={score:.3f} threshold={threshold:.3f}")
-    else:
+
+    if state.replan_count >= state.max_replans and score < threshold:
         log.append(
             f"finalize: max_replans_reached count={state.replan_count}/{state.max_replans} "
             f"score={score:.3f}"
         )
+    elif score >= threshold:
+        log.append(f"finalize: high_confidence score={score:.3f} threshold={threshold:.3f}")
 
-    updates: dict[str, object] = {"phase": "done", "route": route, "log": log}
+    if state.incident_resolved:
+        log.append("finalize: incident_resolved=true")
+    elif state.execution is not None and state.execution.success:
+        log.append(
+            "finalize: execution_succeeded_but_unresolved "
+            f"action={state.execution.action}"
+        )
 
-    # Stage-0: always dry-run via ExecutionProvider (no live cluster I/O).
-    if state.fix_plan is not None:
-        bundle = providers or resolve_providers(config)
-        execution = bundle.execution.execute(state.fix_plan, state=state)
-        updates["execution"] = execution
-        log.append(f"finalize: execution_provider={type(bundle.execution).__name__}")
-        updates["log"] = log
+    if state.outcome_verification is not None:
+        log.append(f"finalize: outcome={state.outcome_verification.reason}")
 
-    return updates
+    return {"phase": "done", "route": route, "log": log}
