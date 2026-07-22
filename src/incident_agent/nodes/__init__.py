@@ -10,6 +10,7 @@ from incident_agent.nodes.hypothesize import hypothesize
 from incident_agent.nodes.plan_fix import plan_fix
 from incident_agent.nodes.score_confidence import score_confidence
 from incident_agent.nodes.validate_fix import validate_fix
+from incident_agent.nodes.verify_hypotheses import verify_hypotheses
 
 __all__ = [
     "compute_confidence",
@@ -19,5 +20,6 @@ __all__ = [
     "plan_fix",
     "score_confidence",
     "validate_fix",
+    "verify_hypotheses",
 ]
 

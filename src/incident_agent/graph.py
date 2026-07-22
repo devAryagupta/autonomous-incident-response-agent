@@ -5,7 +5,14 @@ from typing import Any
 from langchain_core.runnables import RunnableConfig
 
 from incident_agent.contracts import IncidentState
-from incident_agent.nodes import compute_confidence, diagnose, hypothesize, plan_fix, validate_fix
+from incident_agent.nodes import (
+    compute_confidence,
+    diagnose,
+    hypothesize,
+    plan_fix,
+    validate_fix,
+    verify_hypotheses,
+)
 from incident_agent.nodes.enrich import enrich
 from incident_agent.providers import PROVIDERS_CONFIG_KEY, ProviderBundle, default_providers
 from incident_agent.routing import bump_replan, finalize, route_on_confidence
@@ -73,7 +80,8 @@ def build_graph():
     """
     Provider-aware LangGraph with confidence replan loop.
 
-    START -> enrich -> diagnose -> hypothesize -> plan_fix -> validate_fix -> confidence
+    START -> enrich -> diagnose -> hypothesize -> verify_hypotheses -> plan_fix
+          -> validate_fix -> confidence
       ├── high confidence / max retries → finalize → END
       └── low confidence & retries left → replan → hypothesize ↺
 
@@ -85,6 +93,10 @@ def build_graph():
     g.add_node("enrich", _enrich_node)
     g.add_node("diagnose", _with_phase(phase="diagnose", fn=diagnose))
     g.add_node("hypothesize", _with_phase(phase="hypothesize", fn=hypothesize))
+    g.add_node(
+        "verify_hypotheses",
+        _with_phase(phase="verify_hypotheses", fn=verify_hypotheses),
+    )
     g.add_node("plan_fix", _with_phase(phase="plan_fix", fn=plan_fix))
     g.add_node("validate_fix", _with_phase(phase="validate_fix", fn=validate_fix))
     g.add_node("confidence", _confidence_node)
@@ -94,7 +106,8 @@ def build_graph():
     g.add_edge(START, "enrich")
     g.add_edge("enrich", "diagnose")
     g.add_edge("diagnose", "hypothesize")
-    g.add_edge("hypothesize", "plan_fix")
+    g.add_edge("hypothesize", "verify_hypotheses")
+    g.add_edge("verify_hypotheses", "plan_fix")
     g.add_edge("plan_fix", "validate_fix")
     g.add_edge("validate_fix", "confidence")
 

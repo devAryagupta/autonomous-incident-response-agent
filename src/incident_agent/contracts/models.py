@@ -55,10 +55,26 @@ class Hypothesis(ContractBase):
     description: str
     likelihood: float = Field(ge=0.0, le=1.0)
     evidence: list[Evidence] = Field(default_factory=list)
-    # SRE verification steps for a future Verification node (no live I/O yet).
+    # SRE checks the verification engine challenges against observations.
     verification_checks: list[str] = Field(default_factory=list)
     # Bridge to the Stage-0 remediation catalog cause string (planner match key).
     remediation_key: str | None = None
+
+
+VerificationResult = Literal["confirmed", "contradicted", "inconclusive"]
+
+
+class HypothesisVerification(ContractBase):
+    """Outcome of challenging one hypothesis against observed evidence."""
+
+    schema_version: SchemaVersion = "1"
+    hypothesis_id: str
+    hypothesis: str
+    expected_evidence: list[str] = Field(default_factory=list)
+    observed_evidence: list[str] = Field(default_factory=list)
+    result: VerificationResult = "inconclusive"
+    # Posterior − prior for this hypothesis before cross-hypothesis renormalization.
+    confidence_delta: float = 0.0
 
 
 class FixActionType(StrEnum):
@@ -171,6 +187,7 @@ IncidentPhase = Literal[
     "ingest",
     "diagnose",
     "hypothesize",
+    "verify_hypotheses",
     "plan_fix",
     "validate_fix",
     "score_confidence",
@@ -207,6 +224,7 @@ class IncidentState(ContractBase):
     observations: Observations = Field(default_factory=Observations)
     diagnosis: Diagnosis | None = None
     hypotheses: list[Hypothesis] = Field(default_factory=list)
+    hypothesis_verifications: list[HypothesisVerification] = Field(default_factory=list)
     chosen_hypothesis_id: str | None = None
     fix_plan: FixPlan | None = None
     validation: list[ValidationResult] = Field(default_factory=list)

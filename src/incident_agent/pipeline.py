@@ -7,7 +7,14 @@ from incident_agent.contracts import (
     IncidentState,
     Observations,
 )
-from incident_agent.nodes import compute_confidence, diagnose, hypothesize, plan_fix, validate_fix
+from incident_agent.nodes import (
+    compute_confidence,
+    diagnose,
+    hypothesize,
+    plan_fix,
+    validate_fix,
+    verify_hypotheses,
+)
 from incident_agent.nodes.enrich import enrich
 from incident_agent.providers import ProviderBundle, default_providers
 from incident_agent.routing import bump_replan, finalize, route_on_confidence
@@ -21,6 +28,9 @@ def _apply(state: IncidentState, updates: dict[str, object]) -> None:
 def _run_plan_validate_score(state: IncidentState) -> None:
     state.phase = "hypothesize"
     _apply(state, hypothesize(state))
+
+    state.phase = "verify_hypotheses"
+    _apply(state, verify_hypotheses(state))
 
     state.phase = "plan_fix"
     _apply(state, plan_fix(state))

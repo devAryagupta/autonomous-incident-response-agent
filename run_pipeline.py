@@ -50,10 +50,17 @@ def _print_one(incident: CrashLoopBackOffIncident) -> None:
             print("Evidence:")
             for e in h.evidence:
                 print(f"- {e.text}")
-        if h.verification_checks:
-            print("Verification:")
-            for check in h.verification_checks:
-                print(f"- {check}")
+        print()
+
+    if state.hypothesis_verifications:
+        print("Hypothesis Verification:")
+        for v in state.hypothesis_verifications:
+            delta = f"{v.confidence_delta:+.2f}"
+            print(f"- {v.hypothesis}: {v.result} (delta {delta})")
+            if v.expected_evidence:
+                print(f"  expected: {', '.join(v.expected_evidence)}")
+            if v.observed_evidence:
+                print(f"  observed: {', '.join(v.observed_evidence)}")
         print()
 
     print("Fix Plan:")
