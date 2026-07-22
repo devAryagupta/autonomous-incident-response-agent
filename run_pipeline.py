@@ -77,6 +77,19 @@ def _print_one(incident: CrashLoopBackOffIncident) -> None:
                 print(f"  observed: {', '.join(v.observed_evidence)}")
         print()
 
+    if state.remediation_options:
+        print("Remediation Options:")
+        for i, opt in enumerate(state.remediation_options, start=1):
+            marker = " (chosen)" if opt.option_id == state.chosen_remediation_id else ""
+            print(f"{i}. {opt.action}{marker}")
+            print(f"   effect: {opt.expected_effect}")
+            print(
+                f"   risk={opt.risk.value} blast_radius={opt.blast_radius} "
+                f"reversibility={opt.reversibility} rollback_possible={opt.rollback_possible}"
+            )
+            print(f"   confidence={opt.confidence:.2f} safety_score={opt.safety_score:.2f}")
+        print()
+
     print("Fix Plan:")
     if state.fix_plan and state.fix_plan.actions:
         print(f"Risk: {state.fix_plan.risk.value}")
@@ -98,6 +111,40 @@ def _print_one(incident: CrashLoopBackOffIncident) -> None:
 
     print("Confidence:")
     print(f"{state.confidence_score:.2f}" if state.confidence_score is not None else "<none>")
+    print()
+
+    if state.execution_plan:
+        print("Execution Plan:")
+        print(f"action: {state.execution_plan.action}")
+        print(f"target: {state.execution_plan.target}")
+        print(f"preconditions: {state.execution_plan.preconditions}")
+        print(f"expected_outcome: {state.execution_plan.expected_outcome}")
+        print(f"rollback_action: {state.execution_plan.rollback_action}")
+        print()
+
+    if state.approval:
+        print("Approval:")
+        print(f"approved={state.approval.approved} by={state.approval.by}")
+        print(state.approval.comment or "")
+        print()
+
+    if state.execution:
+        print("Execution:")
+        print(f"status={state.execution.status} action={state.execution.action}")
+        for change in state.execution.applied_changes:
+            print(f"- {change}")
+        print()
+
+    if state.outcome_verification:
+        print("Outcome Verification:")
+        print(f"resolved={state.outcome_verification.resolved}")
+        print(f"observed: {state.outcome_verification.observed_outcome}")
+        print(f"unmet: {state.outcome_verification.unmet_expectations}")
+        print(state.outcome_verification.reason)
+        print()
+
+    print("Incident resolved:")
+    print(state.incident_resolved)
 
 
 def main(argv: list[str] | None = None) -> int:

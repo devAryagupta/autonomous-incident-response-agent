@@ -8,13 +8,18 @@ from incident_agent.contracts import (
     Observations,
 )
 from incident_agent.nodes import (
+    approve,
     collect_evidence,
     compute_confidence,
     diagnose,
+    execute_fix,
     hypothesize,
     plan_fix,
+    pre_execute_validate,
+    prepare_execution,
     validate_fix,
     verify_hypotheses,
+    verify_outcome,
 )
 from incident_agent.nodes.enrich import enrich
 from incident_agent.providers import ProviderBundle, default_providers
@@ -44,6 +49,23 @@ def _run_plan_validate_score(state: IncidentState, *, providers: ProviderBundle)
 
     state.phase = "score_confidence"
     _apply(state, compute_confidence(state))
+
+
+def _run_execution_lifecycle(state: IncidentState, *, providers: ProviderBundle) -> None:
+    state.phase = "prepare_execution"
+    _apply(state, prepare_execution(state))
+
+    state.phase = "pre_execute_validate"
+    _apply(state, pre_execute_validate(state))
+
+    state.phase = "approve"
+    _apply(state, approve(state))
+
+    state.phase = "execute"
+    _apply(state, execute_fix(state, providers=providers))
+
+    state.phase = "verify_outcome"
+    _apply(state, verify_outcome(state, providers=providers))
 
 
 def run_deterministic_lifecycle(
@@ -93,6 +115,7 @@ def run_deterministic_lifecycle(
         if decision == "replan":
             _apply(state, bump_replan(state))
             continue
+        _run_execution_lifecycle(state, providers=bundle)
         _apply(state, finalize(state, providers=bundle))
         break
 

@@ -89,8 +89,12 @@ def test_dry_run_execution_provider() -> None:
     result = DryRunExecutionProvider().execute(plan, state=state)
     assert result.executed is False
     assert result.success is True
-    assert "Dry-run OK" in result.summary
+    assert result.status == "dry_run_success"
+    assert result.action == "rollback_deployment"
+    assert result.applied_changes
+    assert "Dry-run success" in result.summary
     assert result.details["provider"] == "dry_run"
+    assert result.details["status"] == "success"
 
 
 def test_enrich_uses_injected_providers() -> None:

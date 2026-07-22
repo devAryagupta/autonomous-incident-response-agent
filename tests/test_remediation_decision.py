@@ -1,0 +1,156 @@
+from datetime import UTC, datetime
+
+from incident_agent.contracts import (
+    Alert,
+    Diagnosis,
+    Evidence,
+    FixActionType,
+    Hypothesis,
+    HypothesisVerification,
+    IncidentState,
+    Observations,
+)
+from incident_agent.nodes.plan_fix import plan_fix
+from incident_agent.remediation.decision import decide_remediation
+
+
+def _state_with_hyps(hyps: list[Hypothesis], *, verifications: list[HypothesisVerification] | None = None) -> IncidentState:
+    state = IncidentState(
+        incident_id="inc-remediation-1",
+        created_at=datetime.now(tz=UTC),
+        alert=Alert(
+            alert_name="CrashLoopBackOff",
+            severity="critical",
+            starts_at=datetime.now(tz=UTC),
+        ),
+        observations=Observations(
+            logs=["OOMKilled"],
+            events=["Back-off restarting failed container"],
+            extra={"target_ref": "deployment/payment-service", "top_n": 3},
+        ),
+        diagnosis=Diagnosis(
+            summary="OOMKilled",
+            category="OOMKilled",
+            confidence=0.9,
+            evidence=[Evidence(source="events", text="OOMKilled event detected")],
+        ),
+        hypotheses=hyps,
+        hypothesis_verifications=verifications or [],
+        chosen_hypothesis_id=hyps[0].hypothesis_id if hyps else None,
+    )
+    return state
+
+
+def test_oom_chooses_increase_memory_over_rollback() -> None:
+    hyps = [
+        Hypothesis(
+            hypothesis_id="h1-memory_leak",
+            description="Memory leak",
+            likelihood=0.70,
+            remediation_key="Resource Constraint (OOMKilled)",
+            verification_checks=["Check heap usage over time"],
+        ),
+        Hypothesis(
+            hypothesis_id="h2-memory_limit_too_low",
+            description="Memory limit too low",
+            likelihood=0.20,
+            remediation_key="Resource Constraint (OOMKilled)",
+        ),
+        Hypothesis(
+            hypothesis_id="h3-traffic_spike",
+            description="Traffic spike",
+            likelihood=0.10,
+            remediation_key="Resource Constraint (OOMKilled)",
+        ),
+    ]
+    verifications = [
+        HypothesisVerification(
+            hypothesis_id="h1-memory_leak",
+            hypothesis="Memory leak",
+            expected_evidence=["Memory grows continuously"],
+            observed_evidence=["Memory increased from 200Mi to 900Mi"],
+            result="confirmed",
+            confidence_delta=0.2,
+        )
+    ]
+    decision = decide_remediation(_state_with_hyps(hyps, verifications=verifications))
+    assert decision.chosen is not None
+    assert decision.chosen.action == "increase_memory_limit"
+    assert decision.chosen.blast_radius == "low"
+    assert decision.chosen.reversibility == "high"
+    assert decision.chosen.rollback_possible is True
+    assert decision.chosen.expected_effect
+    assert decision.options[0].action == "increase_memory_limit"
+    # Rollback exists as a candidate but loses on blast radius / safety.
+    assert any(o.action == "rollback_deployment" for o in decision.options)
+    assert decision.fix_plan.actions[0].action_type == FixActionType.PATCH_RESOURCE
+    assert decision.fix_plan.remediation_option_id == decision.chosen.option_id
+
+
+def test_secret_prefers_config_fix_with_low_blast_radius() -> None:
+    hyps = [
+        Hypothesis(
+            hypothesis_id="h1-secret_not_created",
+            description="Secret not created",
+            likelihood=0.80,
+            remediation_key="Missing Secret",
+        ),
+        Hypothesis(
+            hypothesis_id="h2-wrong_secret_ref",
+            description="Wrong secret name or namespace",
+            likelihood=0.15,
+            remediation_key="Missing Secret",
+        ),
+    ]
+    decision = decide_remediation(_state_with_hyps(hyps))
+    assert decision.chosen is not None
+    assert decision.chosen.action == "create_or_fix_secret"
+    assert decision.chosen.risk.value == "low"
+    assert decision.chosen.blast_radius == "low"
+    assert decision.fix_plan.risk.value == "low"
+
+
+def test_plan_fix_node_writes_options_and_fix_plan() -> None:
+    hyps = [
+        Hypothesis(
+            hypothesis_id="h1-memory_limit_too_low",
+            description="Memory limit too low",
+            likelihood=0.85,
+            remediation_key="Resource Constraint (OOMKilled)",
+        )
+    ]
+    state = _state_with_hyps(hyps)
+    updates = plan_fix(state)
+    assert updates["chosen_remediation_id"]
+    assert updates["remediation_options"]
+    assert updates["fix_plan"].actions
+    top = updates["remediation_options"][0]
+    assert top.action == "increase_memory_limit"
+    assert 0.0 <= top.confidence <= 1.0
+    assert 0.0 <= top.safety_score <= 1.0
+
+
+def test_low_effectiveness_restart_does_not_beat_safer_fix() -> None:
+    hyps = [
+        Hypothesis(
+            hypothesis_id="h1-unhandled_exception",
+            description="Unhandled exception in application",
+            likelihood=0.75,
+            remediation_key="Application Bug / Unhandled Exception",
+        )
+    ]
+    verifications = [
+        HypothesisVerification(
+            hypothesis_id="h1-unhandled_exception",
+            hypothesis="Unhandled exception in application",
+            result="confirmed",
+            expected_evidence=["Stack trace"],
+            observed_evidence=["Traceback (most recent call last):"],
+            confidence_delta=0.15,
+        )
+    ]
+    decision = decide_remediation(_state_with_hyps(hyps, verifications=verifications))
+    assert decision.chosen is not None
+    # Restart is lower blast radius but much lower confidence/effectiveness.
+    assert decision.chosen.action == "rollback_deployment"
+    assert decision.fix_plan.actions[0].action_type == FixActionType.ROLLBACK_DEPLOYMENT

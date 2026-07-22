@@ -6,13 +6,18 @@ from langchain_core.runnables import RunnableConfig
 
 from incident_agent.contracts import IncidentState
 from incident_agent.nodes import (
+    approve,
     collect_evidence,
     compute_confidence,
     diagnose,
+    execute_fix,
     hypothesize,
     plan_fix,
+    pre_execute_validate,
+    prepare_execution,
     validate_fix,
     verify_hypotheses,
+    verify_outcome,
 )
 from incident_agent.nodes.enrich import enrich
 from incident_agent.providers import PROVIDERS_CONFIG_KEY, ProviderBundle, default_providers
@@ -79,6 +84,24 @@ def _confidence_node(
     return updates
 
 
+def _execute_node(
+    state: IncidentState,
+    config: RunnableConfig | None = None,
+) -> dict[str, object]:
+    updates = dict(execute_fix(state, config=_config_from_runnable(config)))
+    updates["phase"] = "execute"
+    return updates
+
+
+def _verify_outcome_node(
+    state: IncidentState,
+    config: RunnableConfig | None = None,
+) -> dict[str, object]:
+    updates = dict(verify_outcome(state, config=_config_from_runnable(config)))
+    updates["phase"] = "verify_outcome"
+    return updates
+
+
 def _finalize_node(
     state: IncidentState,
     config: RunnableConfig | None = None,
@@ -88,12 +111,13 @@ def _finalize_node(
 
 def build_graph():
     """
-    Provider-aware LangGraph with confidence replan loop.
+    Provider-aware LangGraph with confidence replan + execution lifecycle.
 
     START -> enrich -> diagnose -> hypothesize -> collect_evidence
           -> verify_hypotheses -> plan_fix -> validate_fix -> confidence
-      ├── high confidence / max retries → finalize → END
-      └── low confidence & retries left → replan → hypothesize ↺
+      ├── low confidence & retries → replan → hypothesize ↺
+      └── else → prepare_execution → pre_execute_validate → approve
+               → execute → verify_outcome → finalize → END
 
     Providers are injected via:
       invoke(state, config={"configurable": {"providers": ProviderBundle(...)}})
@@ -112,6 +136,17 @@ def build_graph():
     g.add_node("validate_fix", _with_phase(phase="validate_fix", fn=validate_fix))
     g.add_node("confidence", _confidence_node)
     g.add_node("replan", bump_replan)
+    g.add_node(
+        "prepare_execution",
+        _with_phase(phase="prepare_execution", fn=prepare_execution),
+    )
+    g.add_node(
+        "pre_execute_validate",
+        _with_phase(phase="pre_execute_validate", fn=pre_execute_validate),
+    )
+    g.add_node("approve", _with_phase(phase="approve", fn=approve))
+    g.add_node("execute", _execute_node)
+    g.add_node("verify_outcome", _verify_outcome_node)
     g.add_node("finalize", _finalize_node)
 
     g.add_edge(START, "enrich")
@@ -127,11 +162,16 @@ def build_graph():
         "confidence",
         route_on_confidence,
         {
-            "end": "finalize",
+            "end": "prepare_execution",
             "replan": "replan",
         },
     )
     g.add_edge("replan", "hypothesize")
+    g.add_edge("prepare_execution", "pre_execute_validate")
+    g.add_edge("pre_execute_validate", "approve")
+    g.add_edge("approve", "execute")
+    g.add_edge("execute", "verify_outcome")
+    g.add_edge("verify_outcome", "finalize")
     g.add_edge("finalize", END)
 
     return g.compile()

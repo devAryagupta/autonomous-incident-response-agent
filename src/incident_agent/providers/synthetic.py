@@ -50,15 +50,30 @@ class SyntheticObservationProvider:
         summary = ""
 
         if query == "restart_history":
-            count = signals.count("backoff") + signals.count("oomkilled")
-            count = max(count, 1 if "crashloop" in signals else 0)
-            data["restart_count"] = count
-            summary = (
-                f"Restart history for {request.target}: restart_count={count} "
-                f"(Back-off / OOM signals)"
-            )
-            if count >= 2:
-                summary += "; repeated restarts observed"
+            # After a successful remediation dry-run, simulate recovery signals.
+            if state.observations.extra.get("post_execution") and state.execution is not None:
+                if state.execution.success:
+                    data["restart_count"] = 0
+                    summary = (
+                        f"Restart history for {request.target}: restart_count=0; "
+                        "restart count decreases; no recent restarts"
+                    )
+                else:
+                    data["restart_count"] = 3
+                    summary = (
+                        f"Restart history for {request.target}: restart_count=3 "
+                        "(execution failed; CrashLoop continues)"
+                    )
+            else:
+                count = signals.count("backoff") + signals.count("oomkilled")
+                count = max(count, 1 if "crashloop" in signals else 0)
+                data["restart_count"] = count
+                summary = (
+                    f"Restart history for {request.target}: restart_count={count} "
+                    f"(Back-off / OOM signals)"
+                )
+                if count >= 2:
+                    summary += "; repeated restarts observed"
 
         elif query == "failed_mount_events":
             if "secret" in signals and "not found" in signals:
@@ -130,6 +145,28 @@ class SyntheticObservationProvider:
             )
             data["requests_mi"] = 128
             data["limits_mi"] = 256
+
+        elif query == "pod_health":
+            if state.observations.extra.get("post_execution") and state.execution is not None:
+                if state.execution.success:
+                    summary = (
+                        f"Pod health for {request.target}: Ready; pod becomes healthy; "
+                        "no CrashLoopBackOff; crashloop clears"
+                    )
+                    data["ready"] = True
+                    action = state.execution.action or ""
+                    if "secret" in action:
+                        summary += "; secret mount succeeds; secret exists"
+                    if "image" in action or "pull" in action:
+                        summary += "; image pull succeeds; Pulled image"
+                else:
+                    summary = (
+                        f"Pod health for {request.target}: CrashLoopBackOff continues"
+                    )
+                    data["ready"] = False
+            else:
+                summary = f"Pod health for {request.target}: unknown (pre-execution)"
+                data["ready"] = False
 
         elif query in {
             "pod_container_statuses",
