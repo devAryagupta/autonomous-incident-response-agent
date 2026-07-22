@@ -338,8 +338,9 @@ def plan_from_hypotheses(
     - emit a single FixPlan with one or more FixActions (still no execution)
     """
     for h in sorted(hypotheses, key=lambda x: x.likelihood, reverse=True):
+        cause_key = h.remediation_key or h.description
         for cause, rule_id, fn in _RULES:
-            if h.description == cause:
+            if cause_key == cause:
                 return fn(hypothesis_id=h.hypothesis_id, target_ref=target_ref), CatalogMatch(
                     matched_hypothesis_id=h.hypothesis_id,
                     matched_rule=rule_id,

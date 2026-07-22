@@ -31,18 +31,38 @@ def _print_one(incident: CrashLoopBackOffIncident) -> None:
     print()
 
     print("Diagnosis:")
-    print(state.diagnosis.summary if state.diagnosis else "<none>")
+    if state.diagnosis:
+        print(state.diagnosis.category or state.diagnosis.summary)
+        if state.diagnosis.evidence:
+            print("Evidence:")
+            for e in state.diagnosis.evidence:
+                print(f"- {e.text}")
+    else:
+        print("<none>")
     print()
 
     print("Hypotheses:")
     for i, h in enumerate(state.hypotheses, start=1):
-        print(f"{i}. {h.description} ({h.likelihood:.2f})")
-    print()
+        print(f"{i}.")
+        print(h.description)
+        print(f"Confidence: {h.likelihood:.2f}")
+        if h.evidence:
+            print("Evidence:")
+            for e in h.evidence:
+                print(f"- {e.text}")
+        if h.verification_checks:
+            print("Verification:")
+            for check in h.verification_checks:
+                print(f"- {check}")
+        print()
 
     print("Fix Plan:")
     if state.fix_plan and state.fix_plan.actions:
+        print(f"Risk: {state.fix_plan.risk.value}")
         for a in state.fix_plan.actions:
-            print(f"- {a.action_type.value}: {a.target}")
+            change = a.params.get("change") if isinstance(a.params, dict) else None
+            label = change or a.action_type.value
+            print(f"- {label}")
     else:
         print("<none>")
     print()

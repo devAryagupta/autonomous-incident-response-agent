@@ -55,6 +55,10 @@ class Hypothesis(ContractBase):
     description: str
     likelihood: float = Field(ge=0.0, le=1.0)
     evidence: list[Evidence] = Field(default_factory=list)
+    # SRE verification steps for a future Verification node (no live I/O yet).
+    verification_checks: list[str] = Field(default_factory=list)
+    # Bridge to the Stage-0 remediation catalog cause string (planner match key).
+    remediation_key: str | None = None
 
 
 class FixActionType(StrEnum):
