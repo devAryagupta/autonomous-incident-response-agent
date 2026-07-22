@@ -1,0 +1,29 @@
+---
+description: Core architecture, SoC, and repo structure for the incident-response agent
+alwaysApply: true
+---
+
+# Incident agent — architecture rules
+
+Follow `docs/CODING_PRINCIPLES.md` and `CONTRIBUTING.md`.
+
+## Layers (do not mix)
+
+- `contracts/` — types only (`IncidentState`, etc.)
+- Business (`nodes/`, `remediation/`, `validation/`) — domain decisions; no LLM, no live I/O
+- Orchestration (`graph.py`, `pipeline.py`, `routing.py`) — sequencing / replan only
+- `providers/` — Observation / Metrics / Execution / Memory adapters
+- Future: `prompts/`, `llm/`, `tools/` — create those packages; do not dump into business nodes
+
+## Structure
+
+- Flat over deep; max 3–4 levels under `src/incident_agent/`
+- No `utils/`, `helpers/`, `misc/`, or cryptic names
+- Runtime data (`logs`, `memory`, `state`, artifacts) only under `runtime/`, `data/`, or `artifacts/` — never under `src/`
+
+## When editing
+
+- Prefer small, named functions (≈40 lines; refactor before ≈60)
+- Delete dead code you replace
+- Keep Stage-0 paths deterministic and testable without API keys/clusters
+- Match existing patterns; update tests for behavior changes
