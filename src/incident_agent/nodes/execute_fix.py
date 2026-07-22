@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import UTC
 from typing import Any
 
 from incident_agent.contracts import ExecutionResult, IncidentState
@@ -20,7 +21,7 @@ def execute_fix(
     if state.fix_plan is None:
         raise ValueError("state.fix_plan is required before execute_fix()")
     if state.approval is None or not state.approval.approved:
-        stamp = state.created_at
+        stamp = state.created_at if state.created_at.tzinfo else state.created_at.replace(tzinfo=UTC)
         result = ExecutionResult(
             executed=False,
             success=False,
