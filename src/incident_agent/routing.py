@@ -63,8 +63,9 @@ def finalize(
     providers=None,
     config: dict | None = None,
 ) -> dict[str, object]:
-    """Terminal node: mark lifecycle done (execution already ran upstream)."""
-    _ = providers, config
+    """Terminal node: mark lifecycle done and persist episode to memory."""
+    from incident_agent.providers import resolve_providers
+
     route = "end"
     log = list(state.log)
     score = get_confidence_score(state)
@@ -88,5 +89,12 @@ def finalize(
 
     if state.outcome_verification is not None:
         log.append(f"finalize: outcome={state.outcome_verification.reason}")
+
+    bundle = providers or resolve_providers(config)
+    memory_id = bundle.memory.store(state)
+    if memory_id:
+        log.append(f"finalize: memory_stored episode_id={memory_id}")
+    else:
+        log.append("finalize: memory_stored=<none>")
 
     return {"phase": "done", "route": route, "log": log}
