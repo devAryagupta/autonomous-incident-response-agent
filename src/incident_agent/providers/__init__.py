@@ -4,6 +4,7 @@ from incident_agent.providers.bundle import (
     ProviderBundle,
     default_providers,
     k8s_observation_providers,
+    kubectl_execution_providers,
     learning_providers,
     prometheus_metrics_providers,
 )
@@ -68,6 +69,7 @@ __all__ = [
     "default_providers",
     "fulfill_evidence_requests",
     "k8s_observation_providers",
+    "kubectl_execution_providers",
     "learning_providers",
     "live_kubernetes_client",
     "live_prometheus_client",

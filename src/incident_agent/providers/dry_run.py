@@ -52,7 +52,7 @@ class DryRunExecutionProvider:
     Simulates execution without touching Kubernetes.
 
     Returns a structured ExecutionResult (status/action/applied_changes).
-    Later: KubectlExecutionProvider will run real remediations post-approval.
+    Live path: KubectlExecutionProvider (allowlisted actions + ExecutionPolicy).
     """
 
     def execute(self, plan: FixPlan, *, state: IncidentState) -> ExecutionResult:

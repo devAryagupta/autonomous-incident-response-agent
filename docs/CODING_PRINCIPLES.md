@@ -163,7 +163,8 @@ Nodes and the graph depend on **Protocols** (`ObservationProvider`, `MetricsProv
 - Live observations (opt-in): `KubernetesObservationProvider` via `k8s_observation_providers()`  
 - Live metrics (opt-in): `PrometheusMetricsProvider` via `prometheus_metrics_providers()`  
 - Calibration: `ConfidenceCalibrator` bounds overconfidence before mutation (see `calibration/`)  
-- Later: Kubectl / Chroma — **swap backends without rewriting business nodes**
+- Execution: allowlisted `KubectlExecutionProvider` + `ExecutionPolicy` (see `execution/`)  
+- Later: Chroma — **swap backends without rewriting business nodes**
 
 Inject via LangGraph config / `ProviderBundle`; do not hard-code clients inside `diagnose` / `hypothesize`.
 
