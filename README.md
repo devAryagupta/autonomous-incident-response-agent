@@ -26,7 +26,10 @@ Cursor agents also load `.cursor/rules/` (architecture + Python style). Runtime 
   `prometheus_metrics_providers()` — PromQL series feed the Bayesian verification loop.
   **Calibration:** `ConfidenceCalibrator` blends posterior × evidence × memory and
   gates mutation when calibrated confidence is below the safety threshold.
-  Next swap: Kubectl execution (only after calibrated confidence clears the gate).
+  **Execution (opt-in):** `KubectlExecutionProvider` — allowlisted actions
+  (`restart_pod`, `rollout_restart`, `scale_deployment`, `update_resource_limit`)
+  gated by `ExecutionPolicy` × calibrated confidence. Fake client for tests;
+  live via `kubectl_execution_providers(use_live=True)` (optional ``k8s`` extra).
 
 ## Quickstart
 

@@ -21,6 +21,7 @@ from incident_agent.providers.synthetic import (
 )
 
 if TYPE_CHECKING:
+    from incident_agent.execution.kubectl_client import BaseKubectlClient
     from incident_agent.providers.kubernetes import KubernetesClient
     from incident_agent.providers.prometheus import BasePrometheusClient
 
@@ -134,5 +135,50 @@ def prometheus_metrics_providers(
         observations=SyntheticObservationProvider(),
         metrics=metrics,
         execution=DryRunExecutionProvider(),
+        memory=memory,
+    )
+
+
+def kubectl_execution_providers(
+    *,
+    kubectl_client: BaseKubectlClient | None = None,
+    use_live: bool = False,
+    kube_context: str | None = None,
+    default_dry_run: bool = True,
+    memory_path: str | Path | None = None,
+    memory_store: BaseMemoryStore | None = None,
+) -> ProviderBundle:
+    """
+    Allowlisted Kubectl execution; observations/metrics still Stage-0 stubs.
+
+    - Tests: pass ``FakeKubectlClient`` (or omit → fake default).
+    - Live cluster: ``use_live=True`` (requires optional ``k8s`` extra).
+    - ``default_dry_run=True`` blocks real mutations unless state sets
+      ``observations.extra["kubectl_dry_run"]=False``.
+    """
+    from incident_agent.execution.kubectl_client import FakeKubectlClient, live_kubectl_client
+    from incident_agent.execution.provider import KubectlExecutionProvider
+
+    if kubectl_client is not None:
+        client: BaseKubectlClient = kubectl_client
+    elif use_live:
+        client = live_kubectl_client(context=kube_context)
+    else:
+        client = FakeKubectlClient()
+
+    memory: MemoryProvider
+    if memory_store is not None:
+        memory = LocalIncidentMemoryProvider(store=memory_store)
+    elif memory_path is not None:
+        memory = LocalIncidentMemoryProvider(path=memory_path)
+    else:
+        memory = NoMemoryProvider()
+    return ProviderBundle(
+        observations=SyntheticObservationProvider(),
+        metrics=SyntheticMetricsProvider(),
+        execution=KubectlExecutionProvider(
+            client,
+            default_dry_run=default_dry_run,
+        ),
         memory=memory,
     )
