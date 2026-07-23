@@ -160,7 +160,8 @@ def hypothesize(state: IncidentState) -> dict[str, object]:
 Nodes and the graph depend on **Protocols** (`ObservationProvider`, `MetricsProvider`, `ExecutionProvider`, `MemoryProvider`), not concrete backends.
 
 - Stage 0: Synthetic + DryRun + NoMemory  
-- Later: Kubernetes / Prometheus / Kubectl / Chroma — **swap backends without rewriting business nodes**
+- Live observations (opt-in): `KubernetesObservationProvider` via `k8s_observation_providers()`  
+- Later: Prometheus / Kubectl / Chroma — **swap backends without rewriting business nodes**
 
 Inject via LangGraph config / `ProviderBundle`; do not hard-code clients inside `diagnose` / `hypothesize`.
 

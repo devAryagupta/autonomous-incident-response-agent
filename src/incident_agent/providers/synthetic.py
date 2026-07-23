@@ -26,7 +26,7 @@ class SyntheticObservationProvider:
     Pass-through observations from IncidentState.
 
     Stage-0: dataset / fixture already populated `state.observations`.
-    Later: KubernetesObservationProvider will fetch live logs/events.
+    Live path: KubernetesObservationProvider (see providers.kubernetes).
     """
 
     def fetch_observations(self, state: IncidentState) -> Observations:

@@ -19,7 +19,10 @@ Cursor agents also load `.cursor/rules/` (architecture + Python style). Runtime 
 - Deterministic reasoning lifecycle + **LangGraph orchestration** with confidence replan.
 - **Provider architecture** (Observation / Metrics / Execution / Memory) so nodes stay
   source-agnostic. Stage-0 backends: Synthetic + DryRun + NoMemory.
-  Later swaps (no node changes): Kubernetes / Prometheus / Kubectl / Chroma.
+  **Live observations (opt-in):** `KubernetesObservationProvider` via
+  `k8s_observation_providers()` — cluster logs/events map into existing `Observations`
+  so diagnose / hypothesize / verify / remediate stay unchanged.
+  Next swaps: Prometheus metrics, Kubectl execution, confidence calibration.
 
 ## Quickstart
 
@@ -58,6 +61,26 @@ python -m incident_agent.datasets.eval --dataset ".\data\synthetic\crashloopback
 ```powershell
 pytest
 ```
+
+### Real Kubernetes observations (opt-in)
+
+Stage-0 defaults stay synthetic. To read a live cluster:
+
+```powershell
+pip install -e ".[k8s]"
+```
+
+```python
+from incident_agent.providers import k8s_observation_providers
+from incident_agent.graph import GRAPH
+
+# Uses kubeconfig / in-cluster config. Inject ResourceRef or observations.extra["target_ref"].
+bundle = k8s_observation_providers()  # or client=FakeKubernetesClient(...) in tests
+out = GRAPH.invoke(state, providers=bundle)
+```
+
+The provider translates pods/events/logs into `Observations(logs=..., events=..., extra=...)`
+— the reasoning workflow does not know the source is Kubernetes.
 
 ## Benchmark runner
 
