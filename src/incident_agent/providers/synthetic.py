@@ -200,7 +200,7 @@ class SyntheticMetricsProvider:
     """
     Deterministic metrics stub + evidence-request fulfillment.
 
-    Later: PrometheusMetricsProvider will query PromQL.
+    Later: PrometheusMetricsProvider will query PromQL (see providers.prometheus).
     """
 
     def fetch_metrics(self, state: IncidentState) -> dict[str, Any]:

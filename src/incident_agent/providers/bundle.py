@@ -22,6 +22,7 @@ from incident_agent.providers.synthetic import (
 
 if TYPE_CHECKING:
     from incident_agent.providers.kubernetes import KubernetesClient
+    from incident_agent.providers.prometheus import BasePrometheusClient
 
 
 @dataclass(frozen=True, slots=True)
@@ -92,6 +93,46 @@ def k8s_observation_providers(
     return ProviderBundle(
         observations=KubernetesObservationProvider(k8s_client),
         metrics=SyntheticMetricsProvider(),
+        execution=DryRunExecutionProvider(),
+        memory=memory,
+    )
+
+
+def prometheus_metrics_providers(
+    *,
+    metrics_client: BasePrometheusClient | None = None,
+    prometheus_url: str | None = None,
+    memory_path: str | Path | None = None,
+    memory_store: BaseMemoryStore | None = None,
+) -> ProviderBundle:
+    """
+    Real Prometheus metrics; observations/execution still Stage-0 stubs.
+
+    Pass an injectable BasePrometheusClient (e.g. FakePrometheusClient) for tests,
+    or ``prometheus_url`` for live HTTP.
+    """
+    from incident_agent.providers.prometheus import (
+        PrometheusMetricsProvider,
+        live_prometheus_client,
+    )
+
+    if metrics_client is not None:
+        metrics: MetricsProvider = PrometheusMetricsProvider(metrics_client)
+    elif prometheus_url:
+        metrics = PrometheusMetricsProvider(live_prometheus_client(base_url=prometheus_url))
+    else:
+        raise ValueError("prometheus_metrics_providers requires metrics_client or prometheus_url")
+
+    memory: MemoryProvider
+    if memory_store is not None:
+        memory = LocalIncidentMemoryProvider(store=memory_store)
+    elif memory_path is not None:
+        memory = LocalIncidentMemoryProvider(path=memory_path)
+    else:
+        memory = NoMemoryProvider()
+    return ProviderBundle(
+        observations=SyntheticObservationProvider(),
+        metrics=metrics,
         execution=DryRunExecutionProvider(),
         memory=memory,
     )

@@ -22,7 +22,11 @@ Cursor agents also load `.cursor/rules/` (architecture + Python style). Runtime 
   **Live observations (opt-in):** `KubernetesObservationProvider` via
   `k8s_observation_providers()` — cluster logs/events map into existing `Observations`
   so diagnose / hypothesize / verify / remediate stay unchanged.
-  Next swaps: Prometheus metrics, Kubectl execution, confidence calibration.
+  **Live metrics (opt-in):** `PrometheusMetricsProvider` via
+  `prometheus_metrics_providers()` — PromQL series feed the Bayesian verification loop.
+  **Calibration:** `ConfidenceCalibrator` blends posterior × evidence × memory and
+  gates mutation when calibrated confidence is below the safety threshold.
+  Next swap: Kubectl execution (only after calibrated confidence clears the gate).
 
 ## Quickstart
 
