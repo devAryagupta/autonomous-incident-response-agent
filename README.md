@@ -30,6 +30,9 @@ Cursor agents also load `.cursor/rules/` (architecture + Python style). Runtime 
   (`restart_pod`, `rollout_restart`, `scale_deployment`, `update_resource_limit`)
   gated by `ExecutionPolicy` × calibrated confidence. Fake client for tests;
   live via `kubectl_execution_providers(use_live=True)` (optional ``k8s`` extra).
+  **Evaluation:** `incident_agent.eval` multi-dimensional scorecard
+  (diagnosis · investigation efficiency · calibration · remediation safety · MTTR)
+  over decision traces from synthetic incident runs.
 
 ## Quickstart
 
