@@ -9,7 +9,7 @@ fixed home outside the package tree.
 | Subfolder | Purpose |
 |-----------|---------|
 | `logs/` | Run / debug logs |
-| `memory/` | Memory provider dumps / retrieval caches |
+| `memory/` | Local incident memory JSONL (`incidents.jsonl`) + lock files |
 | `state/` | Checkpoints / persisted incident state |
 | `artifacts/` | Ad-hoc outputs from local runs |
 

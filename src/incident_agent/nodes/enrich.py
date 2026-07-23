@@ -44,8 +44,15 @@ def enrich(
     log.append(
         "enrich: "
         f"logs={len(enriched.logs)} events={len(enriched.events)} "
-        f"similar={len(similar)} metrics_keys={list(metrics.keys())}"
+        f"similar={len(similar)} metrics_keys={list(metrics.keys())} "
+        f"memory={type(bundle.memory).__name__}"
     )
+    if similar:
+        log.append(
+            "enrich: memory_hit "
+            f"top_similarity={similar[0].get('similarity_score', '?')} "
+            f"matched={similar[0].get('matched_symptoms', [])}"
+        )
 
     return {
         "observations": enriched,

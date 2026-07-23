@@ -6,9 +6,11 @@ import re
 
 from incident_agent.contracts import Diagnosis, Evidence, Hypothesis, IncidentState
 from incident_agent.hypothesis.candidates import CANDIDATES_BY_CATEGORY, HypothesisCandidate
+from incident_agent.memory.priors import prior_adjustments_from_memory
 
 _PATTERN_BOOST = 0.35
 _DIAGNOSIS_EVIDENCE_BOOST = 0.10
+_MEMORY_EVIDENCE_NOTE = "Historical incident memory supports this cause"
 
 
 def _normalize(scores: list[float]) -> list[float]:
@@ -152,11 +154,20 @@ def hypothesize_from_state(state: IncidentState) -> list[Hypothesis]:
     category = _infer_category(state.diagnosis, context)
     candidates = CANDIDATES_BY_CATEGORY.get(category, CANDIDATES_BY_CATEGORY["Unknown"])
     adjustments = _oom_prior_adjust(context) if category == "OOMKilled" else {}
+    memory_boosts = prior_adjustments_from_memory(
+        candidate_slugs=[c.slug for c in candidates],
+        similar_incidents=list(state.similar_incidents),
+    )
 
     scored: list[tuple[HypothesisCandidate, float, list[str]]] = []
     for cand in candidates:
         raw, evidence_lines = _score_candidate(cand, context, state.diagnosis)
         raw += adjustments.get(cand.slug, 0.0)
+        mem_boost = memory_boosts.get(cand.slug, 0.0)
+        if mem_boost > 0:
+            raw += mem_boost
+            if _MEMORY_EVIDENCE_NOTE not in evidence_lines:
+                evidence_lines = [*evidence_lines, _MEMORY_EVIDENCE_NOTE]
         scored.append((cand, max(raw, 0.01), evidence_lines))
 
     probs = _normalize([raw for _, raw, _ in scored])
