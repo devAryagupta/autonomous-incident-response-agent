@@ -1,82 +1,222 @@
-# Autonomous Incident-Response Agent (progressive build)
+# Autonomous Incident-Response Agent
 
-We’re building this project **progressively in stages** following the plan in:
-`C:\Users\ag551\.claude\plans\https-github-com-madhurprash-langgraph-a-velvety-peacock.md`.
+**A safety-first agent that diagnoses Kubernetes incidents, plans remediations, and only mutates the cluster when calibrated confidence clears an explicit policy gate.**
 
-## Contributing & coding standards
+[![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
+[![License](https://img.shields.io/badge/license-see%20repo-lightgrey.svg)](#license)
+[![Contributions welcome](https://img.shields.io/badge/contributions-welcome-brightgreen.svg)](CONTRIBUTING.md)
 
-Before changing code, read:
+---
 
-- **[CONTRIBUTING.md](CONTRIBUTING.md)** — setup, checks, where to put new code, PR checklist
-- **[docs/CODING_PRINCIPLES.md](docs/CODING_PRINCIPLES.md)** — layered architecture, naming, size limits, SoC, runtime vs source
+## Understand this project in 2 minutes
 
-Cursor agents also load `.cursor/rules/` (architecture + Python style). Runtime data belongs under `runtime/`, not `src/`.
+| | |
+|---|---|
+| **Problem** | SRE teams drown in CrashLoopBackOff and similar alerts. Manual triage is slow; naive automation is unsafe. |
+| **What this is** | A LangGraph-orchestrated agent with a **deterministic reasoning core**, **provider adapters** (synthetic / K8s / Prometheus), **confidence calibration**, and an **allowlisted execution policy**. |
+| **Stage today** | **Stage 0** — reproducible synthetic CrashLoopBackOff eval, full diagnose→plan→gate→execute lifecycle, opt-in live K8s/Prometheus. Not a production on-call bot yet. |
+| **Design bet** | Prove contracts, metrics, and safety gates **before** LLM-heavy reasoning. Business logic stays testable without API keys or a cluster. |
+| **How you help** | Add scenarios, review SRE workflows, simulate K8s failures, improve eval metrics, harden remediation safety. → [CONTRIBUTING.md](CONTRIBUTING.md) |
 
-## Stage 0 (current)
+```text
+Alert / observations
+        │
+        ▼
+ Diagnose → Hypothesize → Collect evidence → Verify
+        │
+        ▼
+ Plan fix → Validate → Score confidence
+        │
+   ┌────┴────┐
+   │ replan  │  (low confidence, retries left)
+   └────┬────┘
+        ▼
+ Prepare → Pre-validate → Approve → Execute → Verify outcome → Done
+                              ▲
+                    ExecutionPolicy × calibrated confidence
+```
 
-- Project skeleton + **synthetic incident dataset** for the first incident class:
-  **Kubernetes `CrashLoopBackOff`**.
-- Deterministic reasoning lifecycle + **LangGraph orchestration** with confidence replan.
-- **Provider architecture** (Observation / Metrics / Execution / Memory) so nodes stay
-  source-agnostic. Stage-0 backends: Synthetic + DryRun + NoMemory.
-  **Live observations (opt-in):** `KubernetesObservationProvider` via
-  `k8s_observation_providers()` — cluster logs/events map into existing `Observations`
-  so diagnose / hypothesize / verify / remediate stay unchanged.
-  **Live metrics (opt-in):** `PrometheusMetricsProvider` via
-  `prometheus_metrics_providers()` — PromQL series feed the Bayesian verification loop.
-  **Calibration:** `ConfidenceCalibrator` blends posterior × evidence × memory and
-  gates mutation when calibrated confidence is below the safety threshold.
-  **Execution (opt-in):** `KubectlExecutionProvider` — allowlisted actions
-  (`restart_pod`, `rollout_restart`, `scale_deployment`, `update_resource_limit`)
-  gated by `ExecutionPolicy` × calibrated confidence. Fake client for tests;
-  live via `kubectl_execution_providers(use_live=True)` (optional ``k8s`` extra).
-  **Evaluation:** `incident_agent.eval` multi-dimensional scorecard
-  (diagnosis · investigation efficiency · calibration · remediation safety · MTTR)
-  over decision traces from synthetic incident runs.
+---
+
+## Why this exists
+
+Most “AI ops” demos jump straight to an LLM calling `kubectl`. This project inverts that:
+
+1. **Contracts first** — typed `IncidentState` for the full lifecycle  
+2. **Eval first** — synthetic incidents with ground truth and multi-dimensional scorecards  
+3. **Safety first** — risk × confidence gates; allowlisted actions only; dry-run by default  
+4. **Providers, not hard-wiring** — swap Synthetic → Kubernetes / Prometheus without rewriting diagnose/plan nodes  
+
+If you care about **trustworthy automation for SRE**, this is the foundation we want the community to pressure-test.
+
+---
+
+## Current status (Stage 0)
+
+| Area | Status | Notes |
+|------|--------|--------|
+| CrashLoopBackOff synthetic dataset | **Done** | Generator + schema + fixtures; JSONL eval |
+| Deterministic diagnose / hypothesize / plan / validate | **Done** | Pure business nodes; no LLM required |
+| Evidence collection + Bayesian hypothesis verification | **Done** | Specs + evaluator loop |
+| Confidence scoring + replan routing | **Done** | Threshold + `max_replans` |
+| Confidence calibration (mutation gate) | **Done** | Blends posterior × evidence × memory |
+| Local episode memory | **Done** | Priors / retrieval; runtime under `runtime/` |
+| Execution lifecycle (prepare → approve → execute → verify) | **Done** | Dry-run default |
+| Kubectl allowlisted actions | **Done (opt-in)** | `restart_pod`, `rollout_restart`, `scale_deployment`, `update_resource_limit` |
+| Live K8s observations | **Done (opt-in)** | `KubernetesObservationProvider` |
+| Live Prometheus metrics | **Done (opt-in)** | `PrometheusMetricsProvider` |
+| Multi-dimensional eval scorecard | **Done** | Diagnosis · efficiency · calibration · remediation safety · MTTR |
+| LLM / prompt layer | **Planned** | Dedicated `llm/` + `prompts/` packages (not inline in nodes) |
+| Additional incident classes (OOM, ImagePull, network) | **Open** | CrashLoop is first; community scenarios welcome |
+| Production on-call deployment | **Not yet** | Stage 0 is research + eval scaffolding |
+
+Details: [docs/STATUS.md](docs/STATUS.md).
+
+---
+
+## Architecture
+
+Layers depend **inward**. Outer layers may call inner layers; domain rules never reach out for HTTP, kubectl, or LLMs directly.
+
+```mermaid
+flowchart TB
+  subgraph orchestration ["Orchestration"]
+    G[graph.py / pipeline.py / routing.py]
+  end
+
+  subgraph business ["Business logic — no live I/O"]
+    N[nodes / diagnosis / hypothesis]
+    R[remediation / validation]
+    V[verification / evidence / calibration]
+    E[execution policy + actions]
+  end
+
+  subgraph contracts ["Contracts"]
+    C[IncidentState + Pydantic models]
+  end
+
+  subgraph providers ["Providers — I/O adapters"]
+    O[ObservationProvider]
+    M[MetricsProvider]
+    X[ExecutionProvider]
+    Mem[MemoryProvider]
+  end
+
+  subgraph outside ["Outside src/"]
+    RT[runtime/ · data/ · artifacts/]
+  end
+
+  G --> N
+  G --> R
+  G --> V
+  G --> E
+  N --> C
+  R --> C
+  V --> C
+  E --> C
+  G --> O
+  G --> M
+  G --> X
+  G --> Mem
+  O --> RT
+  Mem --> RT
+```
+
+| Layer | Location today | Responsibility |
+|-------|----------------|----------------|
+| Contracts | `src/incident_agent/contracts/` | Typed state only |
+| Business | `nodes/`, `diagnosis/`, `hypothesis/`, `remediation/`, `validation/`, `verification/`, `calibration/`, `execution/` | Domain decisions |
+| Orchestration | `graph.py`, `pipeline.py`, `routing.py` | Sequencing and replan |
+| Providers | `src/incident_agent/providers/` | Observation / Metrics / Execution / Memory backends |
+| Datasets & eval | `datasets/`, `eval/`, `benchmark.py` | Synthetic data + scorecards |
+| Runtime data | `runtime/`, `data/`, `artifacts/` | Never under `src/` |
+
+Full rules: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) · [docs/CODING_PRINCIPLES.md](docs/CODING_PRINCIPLES.md).
+
+---
+
+## Workflow
+
+What happens on one incident run:
+
+```mermaid
+flowchart TD
+  START([START]) --> enrich
+  enrich --> diagnose
+  diagnose --> hypothesize
+  hypothesize --> collect_evidence
+  collect_evidence --> verify_hypotheses
+  verify_hypotheses --> plan_fix
+  plan_fix --> validate_fix
+  validate_fix --> confidence
+
+  confidence -->|score ≥ threshold| prepare_execution
+  confidence -->|score low + retries left| replan
+  replan --> hypothesize
+
+  prepare_execution --> pre_execute_validate
+  pre_execute_validate --> approve
+  approve --> execute
+  execute --> verify_outcome
+  verify_outcome --> finalize
+  finalize --> END([END])
+```
+
+**Safety path:** `ExecutionPolicy` compares **calibrated confidence** to per-risk thresholds (LOW 0.75 → CRITICAL 0.99). Below threshold → human approval / no mutation. Stage-0 default execution is **dry-run**.
+
+---
 
 ## Quickstart
 
-### Create venv + install
+Requires **Python 3.12+**.
 
-```powershell
-cd "d:\autonomous incident-response agent"
-py -3.12 -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install -U pip
-pip install -e ".[dev]"
+### Setup
+
+```bash
+git clone https://github.com/AryaNamekart/autonomous-incident-response-agent.git
+cd autonomous-incident-response-agent
+
+python -m venv .venv
+# Windows PowerShell: .\.venv\Scripts\Activate.ps1
+# macOS/Linux:
+source .venv/bin/activate
+
+pip install -U pip
+pip install -e ".[dev,agent]"
 ```
 
-### Generate dataset
+### Generate synthetic CrashLoop incidents
 
-```powershell
-python -m incident_agent.datasets.crashloopbackoff.generate --out ".\data\synthetic\crashloopbackoff\incidents.jsonl" --n 50
-```
-
-### Evaluate predictions (dataset layer)
-
-1) Prepare a predictions file (`.jsonl`), one JSON per incident id, e.g.:
-
-```json
-{"schema_version":"1","incident_id":"clb-...","predicted_category":"missing_env_var","predicted_root_cause":"...","predicted_fix_summary":"..."}
-```
-
-2) Run:
-
-```powershell
-python -m incident_agent.datasets.eval --dataset ".\data\synthetic\crashloopbackoff\incidents.jsonl" --predictions ".\predictions.jsonl"
+```bash
+python -m incident_agent.datasets.crashloopbackoff.generate \
+  --out "./data/synthetic/crashloopbackoff/incidents.jsonl" \
+  --n 50
 ```
 
 ### Run tests
 
-```powershell
+```bash
 pytest
+ruff check src tests
 ```
 
-### Real Kubernetes observations (opt-in)
+### Benchmark (plumbing baselines)
 
-Stage-0 defaults stay synthetic. To read a live cluster:
+```bash
+export PYTHONPATH=./src   # Windows PowerShell: $env:PYTHONPATH=(Resolve-Path .\src).Path
 
-```powershell
+python -m incident_agent.benchmark \
+  --task crashloopbackoff \
+  --dataset "./data/synthetic/crashloopbackoff/incidents.jsonl" \
+  --baseline heuristic \
+  --out-dir "./artifacts/benchmarks/crashloop"
+```
+
+Baselines: `oracle` (sanity / 1.0 category accuracy) · `empty` (lower bound) · `heuristic` (keyword matcher).
+
+### Optional: live Kubernetes observations
+
+```bash
 pip install -e ".[k8s]"
 ```
 
@@ -84,30 +224,56 @@ pip install -e ".[k8s]"
 from incident_agent.providers import k8s_observation_providers
 from incident_agent.graph import GRAPH
 
-# Uses kubeconfig / in-cluster config. Inject ResourceRef or observations.extra["target_ref"].
-bundle = k8s_observation_providers()  # or client=FakeKubernetesClient(...) in tests
+bundle = k8s_observation_providers()  # kubeconfig / in-cluster
 out = GRAPH.invoke(state, providers=bundle)
 ```
 
-The provider translates pods/events/logs into `Observations(logs=..., events=..., extra=...)`
-— the reasoning workflow does not know the source is Kubernetes.
+Reasoning nodes stay unchanged — only the observation source swaps.
 
-## Benchmark runner
+More detail: [docs/](docs/README.md).
 
-Runs a benchmark over a dataset and writes artifacts:
+---
 
-- `predictions.<baseline>.jsonl`
-- `report.<baseline>.json`
+## How to contribute
 
-Example:
+We want collaborators who care about **SRE realism** and **safe automation**, not just code volume.
 
-```powershell
-$env:PYTHONPATH=(Resolve-Path .\src).Path
-py -m incident_agent.benchmark --task crashloopbackoff --dataset ".\data\synthetic\crashloopbackoff\incidents.jsonl" --baseline heuristic --out-dir ".\artifacts\benchmarks\crashloop"
-```
+| Path | Impact | Start here |
+|------|--------|------------|
+| **1. Add incident scenarios** | Better coverage & harder eval | [CONTRIBUTING.md §1](CONTRIBUTING.md#1-add-incident-scenarios) |
+| **2. Review SRE workflows** | Keep the agent honest vs real on-call practice | [CONTRIBUTING.md §2](CONTRIBUTING.md#2-review-sre-workflows) |
+| **3. Add Kubernetes failure simulations** | Richer telemetry & failure modes | [CONTRIBUTING.md §3](CONTRIBUTING.md#3-add-kubernetes-failure-simulations) |
+| **4. Improve evaluation metrics** | Measure what matters for autonomy | [CONTRIBUTING.md §4](CONTRIBUTING.md#4-improve-evaluation-metrics) |
+| **5. Review remediation safety policies** | Prevent dangerous mutations | [CONTRIBUTING.md §5](CONTRIBUTING.md#5-review-remediation-safety-policies) |
 
-Baselines:
+Read **[CONTRIBUTING.md](CONTRIBUTING.md)** before opening a PR. Architecture PRs that mix layers (e.g. kubectl inside `diagnose`) will be asked to change.
 
-- `oracle`: copies ground-truth from dataset (sanity check, should score 1.0 category accuracy)
-- `empty`: emits no predictions (lower bound)
-- `heuristic`: simple keyword matcher (no AI) to validate end-to-end plumbing
+---
+
+## Documentation map
+
+| Doc | Purpose |
+|-----|---------|
+| [CONTRIBUTING.md](CONTRIBUTING.md) | Setup, contribution paths, PR checklist |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Layers, providers, workflow depth |
+| [docs/STATUS.md](docs/STATUS.md) | What’s shipped vs planned |
+| [docs/CODING_PRINCIPLES.md](docs/CODING_PRINCIPLES.md) | Naming, size limits, SoC rules |
+| [docs/README.md](docs/README.md) | Full docs index |
+| [runtime/README.md](runtime/README.md) | Where runtime data lives |
+| [datasets/crashloopbackoff/README.md](src/incident_agent/datasets/crashloopbackoff/README.md) | Scenario schema & generator |
+
+When docs disagree with code, **trust the code** and open a docs PR.
+
+---
+
+## License
+
+A license file is not yet committed. If you are evaluating this for your org, treat it as **source-available for collaboration** until an SPDX license is added. Maintainers: add `LICENSE` before a wide public launch so contributors know the terms.
+
+---
+
+## Maintainers & contact
+
+- Repository: [AryaNamekart/autonomous-incident-response-agent](https://github.com/AryaNamekart/autonomous-incident-response-agent)
+- Prefer **GitHub Issues** for bugs, scenario ideas, and safety review threads  
+- Prefer **Pull Requests** for concrete improvements (even small fixture PRs are welcome)

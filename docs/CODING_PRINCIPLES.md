@@ -5,7 +5,10 @@ All contributors (human and AI) must follow these rules.
 
 Related files:
 
-- [CONTRIBUTING.md](../CONTRIBUTING.md) — how to set up, test, and submit changes
+- [../README.md](../README.md) — 2-minute overview, diagrams, current status
+- [CONTRIBUTING.md](../CONTRIBUTING.md) — contribution paths, setup, PR checklist
+- [ARCHITECTURE.md](ARCHITECTURE.md) — layers, providers, workflow
+- [STATUS.md](STATUS.md) — shipped vs planned
 - [.cursor/rules/](../.cursor/rules/) — Cursor agent rules that enforce the same standards
 
 ---
