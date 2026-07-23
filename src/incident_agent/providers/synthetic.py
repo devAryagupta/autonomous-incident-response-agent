@@ -26,7 +26,7 @@ class SyntheticObservationProvider:
     Pass-through observations from IncidentState.
 
     Stage-0: dataset / fixture already populated `state.observations`.
-    Later: KubernetesObservationProvider will fetch live logs/events.
+    Live path: KubernetesObservationProvider (see providers.kubernetes).
     """
 
     def fetch_observations(self, state: IncidentState) -> Observations:
@@ -200,7 +200,7 @@ class SyntheticMetricsProvider:
     """
     Deterministic metrics stub + evidence-request fulfillment.
 
-    Later: PrometheusMetricsProvider will query PromQL.
+    Later: PrometheusMetricsProvider will query PromQL (see providers.prometheus).
     """
 
     def fetch_metrics(self, state: IncidentState) -> dict[str, Any]:
