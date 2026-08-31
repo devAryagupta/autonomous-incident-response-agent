@@ -83,9 +83,9 @@ def test_write_golden_report(tmp_path: Path) -> None:
     assert "incident_id" in out_csv.read_text(encoding="utf-8")
 
 
-def test_golden_file_on_disk_has_thirteen_rows() -> None:
+def test_golden_file_on_disk_has_nine_rows() -> None:
     path = Path("data/synthetic/crashloopbackoff/goldendataset/crashloop_golden_dataset.jsonl")
     if not path.exists():
         return
     lines = [ln for ln in path.read_text(encoding="utf-8").splitlines() if ln.strip()]
-    assert len(lines) == 13
+    assert len(lines) == 9
