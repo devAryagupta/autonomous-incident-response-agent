@@ -80,11 +80,15 @@ def run_deterministic_lifecycle(
     confidence_threshold: float | None = None,
     providers: ProviderBundle | None = None,
     created_at: datetime | None = None,
+    stop_before_execution: bool = False,
 ) -> IncidentState:
     """
     Execute the deterministic incident lifecycle (no LangGraph, no LLM, no live I/O).
 
     Providers are injected the same way as GRAPH (defaults = synthetic/dry-run/no-memory).
+
+    When ``stop_before_execution`` is True, stop after plan / validate / confidence
+    (partial eval slice — no dry-run execute or outcome verify).
     """
     bundle = providers or default_providers()
 
@@ -115,6 +119,9 @@ def run_deterministic_lifecycle(
         if decision == "replan":
             _apply(state, bump_replan(state))
             continue
+        if stop_before_execution:
+            state.phase = "score_confidence"
+            break
         _run_execution_lifecycle(state, providers=bundle)
         _apply(state, finalize(state, providers=bundle))
         break

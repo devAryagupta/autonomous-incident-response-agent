@@ -1,4 +1,4 @@
-"""Extract failure signals from observation logs/events (no live I/O)."""
+"""Extract scoped CrashLoopBackOff signals from logs/events/metrics."""
 
 from __future__ import annotations
 
@@ -19,21 +19,15 @@ _REASON_RE = re.compile(
     re.IGNORECASE,
 )
 
-_OOM_RE = re.compile(
-    r"oomkilled|killed due to (?:oom|memory)|out of memory",
+_OOM_RE = re.compile(r"oomkilled|memory limit exceeded|out of memory|container killed", re.IGNORECASE)
+_CONFIG_RE = re.compile(
+    r"missing environment variable|environment variable.*(?:missing|not set)|"
+    r"keyerror|configuration missing|yaml parse error|invalid configuration|"
+    r"secret missing|\bsecret\b.*\bnot found\b|failedmount",
     re.IGNORECASE,
 )
-_IMAGE_PULL_RE = re.compile(
-    r"errimagepull|imagepullbackoff|manifest unknown|failed to pull image|"
-    r"pull access denied|authentication required|image not found",
-    re.IGNORECASE,
-)
-_SECRET_RE = re.compile(
-    r"\bsecret\b.*\bnot found\b|failedmount.*\bsecret\b|no such file.*secrets",
-    re.IGNORECASE,
-)
-_APP_CRASH_RE = re.compile(
-    r"traceback|unhandled exception|panic:|segmentation fault",
+_APP_FAILURE_RE = re.compile(
+    r"unhandled exception|traceback|panic\b|fatal error|application exception",
     re.IGNORECASE,
 )
 
@@ -46,9 +40,9 @@ class ExtractedEvidence:
     exit_codes: tuple[int, ...] = ()
     reasons: tuple[str, ...] = ()
     has_oomkilled: bool = False
-    has_image_pull_failure: bool = False
-    has_missing_secret: bool = False
-    has_application_crash: bool = False
+    has_invalid_configuration: bool = False
+    has_application_failure: bool = False
+    has_generic_failure: bool = False
 
 
 @dataclass
@@ -57,9 +51,9 @@ class _Accumulator:
     exit_codes: list[int] = field(default_factory=list)
     reasons: list[str] = field(default_factory=list)
     has_oomkilled: bool = False
-    has_image_pull_failure: bool = False
-    has_missing_secret: bool = False
-    has_application_crash: bool = False
+    has_invalid_configuration: bool = False
+    has_application_failure: bool = False
+    has_generic_failure: bool = False
     _seen_text: set[str] = field(default_factory=set)
 
     def add(self, source: EvidenceSource, text: str) -> None:
@@ -76,43 +70,55 @@ def _scan_line(acc: _Accumulator, source: EvidenceSource, line: str) -> None:
         if code not in acc.exit_codes:
             acc.exit_codes.append(code)
         acc.add(source, f"Container terminated with exit code {code}")
+        if code != 0:
+            acc.has_generic_failure = True
 
     for match in _REASON_RE.finditer(line):
         reason = match.group(1)
         if reason not in acc.reasons:
             acc.reasons.append(reason)
+        if reason and reason.lower() not in {"completed", "success"}:
+            acc.has_generic_failure = True
 
     if _OOM_RE.search(line):
         acc.has_oomkilled = True
         acc.add(source, "OOMKilled event detected")
+        if "memory limit exceeded" in line.lower():
+            acc.add(source, "Memory limit exceeded")
+        if "container killed" in line.lower():
+            acc.add(source, "Container killed")
 
-    if _IMAGE_PULL_RE.search(line):
-        acc.has_image_pull_failure = True
+    if _CONFIG_RE.search(line):
+        acc.has_invalid_configuration = True
         lower = line.lower()
-        if "errimagepull" in lower:
-            acc.add(source, "ErrImagePull event detected")
-        elif "imagepullbackoff" in lower:
-            acc.add(source, "ImagePullBackOff event detected")
-        elif "manifest unknown" in lower:
-            acc.add(source, "Image manifest unknown")
-        else:
-            acc.add(source, "Image pull failure detected")
+        if "missing environment variable" in lower or "environment variable" in lower and "not set" in lower:
+            acc.add(source, "Missing environment variable")
+        elif "keyerror" in lower:
+            acc.add(source, "KeyError")
+        elif "configuration missing" in lower:
+            acc.add(source, "Configuration missing")
+        elif "yaml parse error" in lower:
+            acc.add(source, "YAML parse error")
+        elif "invalid configuration" in lower:
+            acc.add(source, "Invalid configuration")
+        elif "failedmount" in lower:
+            acc.add(source, "FailedMount")
+        elif "secret missing" in lower or ("secret" in lower and "not found" in lower):
+            acc.add(source, "Secret missing")
 
-    if _SECRET_RE.search(line):
-        acc.has_missing_secret = True
-        acc.add(source, "Missing secret / FailedMount secret detected")
-
-    if _APP_CRASH_RE.search(line):
-        acc.has_application_crash = True
+    if _APP_FAILURE_RE.search(line):
+        acc.has_application_failure = True
         lower = line.lower()
         if "traceback" in lower:
-            acc.add(source, "Application traceback detected")
-        elif "panic:" in lower:
-            acc.add(source, "Application panic detected")
+            acc.add(source, "Traceback")
+        elif "panic" in lower:
+            acc.add(source, "panic")
+        elif "fatal error" in lower:
+            acc.add(source, "fatal error")
+        elif "application exception" in lower:
+            acc.add(source, "application exception")
         elif "unhandled exception" in lower:
-            acc.add(source, "Unhandled exception detected")
-        else:
-            acc.add(source, "Application crash pattern detected")
+            acc.add(source, "Unhandled exception")
 
 
 def _scan_extra(acc: _Accumulator, extra: dict) -> None:
@@ -133,6 +139,24 @@ def _scan_extra(acc: _Accumulator, extra: dict) -> None:
             acc.has_oomkilled = True
             acc.add("describe", "OOMKilled event detected")
 
+    metrics = extra.get("metrics")
+    if isinstance(metrics, dict):
+        _scan_metrics_dict(acc, metrics)
+
+
+def _scan_metrics_dict(acc: _Accumulator, metrics: dict) -> None:
+    for key, value in metrics.items():
+        if isinstance(value, dict):
+            _scan_metrics_dict(acc, value)
+            continue
+        if isinstance(value, (list, tuple)):
+            for item in value:
+                if isinstance(item, str):
+                    _scan_line(acc, "metrics", item)
+            continue
+        if isinstance(value, str):
+            _scan_line(acc, "metrics", f"{key}: {value}")
+
 
 def extract_evidence(observations: Observations) -> ExtractedEvidence:
     acc = _Accumulator()
@@ -147,19 +171,12 @@ def extract_evidence(observations: Observations) -> ExtractedEvidence:
         if 137 in acc.exit_codes:
             acc.add("other", "Exit code 137 indicates SIGKILL / OOMKilled")
 
-    # Non-zero exit without a more specific cause still supports Application Crash.
-    non_zero = [c for c in acc.exit_codes if c not in (0, 137)]
-    if non_zero and not (
-        acc.has_oomkilled or acc.has_image_pull_failure or acc.has_missing_secret
-    ):
-        acc.has_application_crash = True
-
     return ExtractedEvidence(
         items=tuple(acc.items),
         exit_codes=tuple(acc.exit_codes),
         reasons=tuple(acc.reasons),
         has_oomkilled=acc.has_oomkilled,
-        has_image_pull_failure=acc.has_image_pull_failure,
-        has_missing_secret=acc.has_missing_secret,
-        has_application_crash=acc.has_application_crash,
+        has_invalid_configuration=acc.has_invalid_configuration,
+        has_application_failure=acc.has_application_failure,
+        has_generic_failure=acc.has_generic_failure,
     )

@@ -28,10 +28,10 @@ def _state(
 
 def test_hypothesize_returns_top_n_and_probabilities() -> None:
     diagnosis = Diagnosis(
-        summary="Missing Secret",
-        category="Missing Secret",
+        summary="Invalid Configuration",
+        category="Invalid Configuration",
         confidence=0.85,
-        evidence=[Evidence(source="events", text="Missing secret / FailedMount secret detected")],
+        evidence=[Evidence(source="events", text="Secret missing")],
     )
     state = _state(
         diagnosis=diagnosis,
@@ -54,7 +54,7 @@ def test_hypothesize_returns_top_n_and_probabilities() -> None:
 
 def test_hypothesize_oom_produces_sre_ranked_causes() -> None:
     diagnosis = Diagnosis(
-        summary="Resource Constraint (OOMKilled)",
+        summary="OOMKilled",
         category="OOMKilled",
         confidence=0.9,
         evidence=[
@@ -79,7 +79,7 @@ def test_hypothesize_oom_produces_sre_ranked_causes() -> None:
 
 
 def test_hypothesize_never_returns_single_hypothesis() -> None:
-    diagnosis = Diagnosis(summary="Unclear crash", category="Unknown", confidence=0.4)
+    diagnosis = Diagnosis(summary="Unclear crash", category="Application Failure", confidence=0.4)
     state = _state(diagnosis=diagnosis, logs=["something unrelated"], top_n=1)
     hyps = hypothesize(state)["hypotheses"]
     assert len(hyps) >= 2
@@ -88,14 +88,14 @@ def test_hypothesize_never_returns_single_hypothesis() -> None:
 
 def test_hypothesize_is_deterministic() -> None:
     diagnosis = Diagnosis(
-        summary="Invalid Image Tag / Image Pull Error",
-        category="Invalid Image",
+        summary="Invalid Configuration",
+        category="Invalid Configuration",
         confidence=0.9,
-        evidence=[Evidence(source="events", text="ErrImagePull event detected")],
+        evidence=[Evidence(source="events", text="Invalid configuration")],
     )
     state = _state(
         diagnosis=diagnosis,
-        events=['Warning  Failed  kubelet  Error: ErrImagePull', "manifest unknown"],
+        events=["Warning  FailedMount kubelet secret missing"],
     )
     a = hypothesize(state)["hypotheses"]
     b = hypothesize(state)["hypotheses"]

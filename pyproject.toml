@@ -20,6 +20,11 @@ agent = [
 k8s = [
   "kubernetes>=29.0",
 ]
+huggingface = [
+  "pandas>=2.0",
+  "pyarrow>=14.0",
+  "huggingface_hub>=0.20",
+]
 dev = [
   "pytest>=8.0",
   "ruff>=0.5",

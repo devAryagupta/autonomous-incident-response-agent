@@ -1,4 +1,4 @@
-"""SRE-style root-cause candidates keyed by diagnosis category."""
+"""SRE-style root-cause candidates keyed by scoped diagnosis category."""
 
 from __future__ import annotations
 
@@ -84,65 +84,14 @@ OOM_CANDIDATES: tuple[HypothesisCandidate, ...] = (
     ),
 )
 
-INVALID_IMAGE_CANDIDATES: tuple[HypothesisCandidate, ...] = (
-    HypothesisCandidate(
-        cause="Wrong image tag",
-        slug="wrong_image_tag",
-        prior=0.50,
-        patterns=(
-            _rx(r"manifest unknown", r"not found", r"wrong tag|invalid tag|tag .* not"),
-        ),
-        default_evidence=("Image reference could not be resolved",),
-        verification_checks=(
-            "Verify image tag exists in the registry",
-            "Compare deployed tag to last known-good release",
-            "Check recent deployment image changes",
-        ),
-        remediation_key="Invalid Image Tag / Image Pull Error",
-    ),
-    HypothesisCandidate(
-        cause="Image deleted or repository missing",
-        slug="image_deleted",
-        prior=0.30,
-        patterns=(
-            _rx(r"repository does not exist", r"image not found", r"deleted"),
-        ),
-        default_evidence=("Registry reports image/repository missing",),
-        verification_checks=(
-            "Confirm repository still exists in the registry",
-            "Check whether the image was garbage-collected or retagged",
-        ),
-        remediation_key="Invalid Image Tag / Image Pull Error",
-    ),
-    HypothesisCandidate(
-        cause="Missing registry credentials",
-        slug="missing_registry_auth",
-        prior=0.20,
-        patterns=(
-            _rx(
-                r"unauthorized",
-                r"authentication required",
-                r"pull access denied",
-                r"imagepullsecret",
-            ),
-        ),
-        default_evidence=("Registry authentication failure",),
-        verification_checks=(
-            "Check imagePullSecrets on the ServiceAccount/Pod",
-            "Validate registry credentials secret contents",
-            "Test registry login from a debug pod",
-        ),
-        remediation_key="Invalid Image Tag / Image Pull Error",
-    ),
-)
 
-MISSING_SECRET_CANDIDATES: tuple[HypothesisCandidate, ...] = (
+INVALID_CONFIGURATION_CANDIDATES: tuple[HypothesisCandidate, ...] = (
     HypothesisCandidate(
         cause="Secret not created",
         slug="secret_not_created",
-        prior=0.55,
+        prior=0.40,
         patterns=(
-            _rx(r"secret .* not found", r"does not exist"),
+            _rx(r"secret .* not found", r"secret missing", r"failedmount", r"does not exist"),
         ),
         default_evidence=("Referenced secret was not found",),
         verification_checks=(
@@ -153,57 +102,18 @@ MISSING_SECRET_CANDIDATES: tuple[HypothesisCandidate, ...] = (
         remediation_key="Missing Secret",
     ),
     HypothesisCandidate(
-        cause="Wrong secret name or namespace",
-        slug="wrong_secret_ref",
-        prior=0.30,
-        patterns=(
-            _rx(r"wrong namespace|namespace", r"name mismatch|misreferenc"),
-        ),
-        default_evidence=("Secret reference may point to the wrong name/namespace",),
-        verification_checks=(
-            "Compare pod secretRef/volume name to existing secrets",
-            "Check secret exists in the pod namespace",
-        ),
-        remediation_key="Missing Secret",
-    ),
-    HypothesisCandidate(
-        cause="Incorrect volume or envFrom mount",
-        slug="incorrect_secret_mount",
-        prior=0.15,
-        patterns=(
-            _rx(r"failedmount", r"volume", r"envfrom|/etc/secrets"),
-        ),
-        default_evidence=("Secret mount/envFrom wiring may be incorrect",),
-        verification_checks=(
-            "Inspect volumeMounts and envFrom in the pod spec",
-            "Confirm mount path matches what the app expects",
-        ),
-        remediation_key="Missing Secret",
-    ),
-)
-
-APPLICATION_CRASH_CANDIDATES: tuple[HypothesisCandidate, ...] = (
-    HypothesisCandidate(
-        cause="Unhandled exception in application",
-        slug="unhandled_exception",
-        prior=0.50,
-        patterns=(
-            _rx(r"traceback", r"unhandled exception", r"exception:"),
-        ),
-        default_evidence=("Application raised an unhandled exception",),
-        verification_checks=(
-            "Inspect previous container logs for the stack trace",
-            "Identify the failing code path and recent deploy",
-            "Reproduce crash locally with the same config",
-        ),
-        remediation_key="Application Bug / Unhandled Exception",
-    ),
-    HypothesisCandidate(
         cause="Bad configuration",
         slug="bad_config",
-        prior=0.30,
+        prior=0.35,
         patterns=(
-            _rx(r"failed to load config", r"invalid configuration", r"\byaml:\b", r"\bjson:\b"),
+            _rx(
+                r"invalid configuration",
+                r"configuration missing",
+                r"failed to load config",
+                r"\byaml parse error\b|\byaml:\b",
+                r"\bjson:\b",
+                r"keyerror",
+            ),
         ),
         default_evidence=("Configuration parse/validation error at startup",),
         verification_checks=(
@@ -215,9 +125,9 @@ APPLICATION_CRASH_CANDIDATES: tuple[HypothesisCandidate, ...] = (
     HypothesisCandidate(
         cause="Missing environment variable",
         slug="missing_env_var",
-        prior=0.20,
+        prior=0.25,
         patterns=(
-            _rx(r"environment variable.*(?:missing|not set)", r"required .* env"),
+            _rx(r"environment variable.*(?:missing|not set)", r"required .* env", r"keyerror"),
         ),
         default_evidence=("Required environment variable may be unset",),
         verification_checks=(
@@ -228,51 +138,61 @@ APPLICATION_CRASH_CANDIDATES: tuple[HypothesisCandidate, ...] = (
     ),
 )
 
-UNKNOWN_CANDIDATES: tuple[HypothesisCandidate, ...] = (
+
+APPLICATION_FAILURE_CANDIDATES: tuple[HypothesisCandidate, ...] = (
     HypothesisCandidate(
-        cause="Application crash on startup",
-        slug="startup_crash_unknown",
-        prior=0.40,
-        patterns=(_rx(r"traceback|panic:|fatal:|exit status|exit code"),),
-        default_evidence=("Container exits during startup without a clear category",),
+        cause="Unhandled exception in application",
+        slug="unhandled_exception",
+        prior=0.60,
+        patterns=(
+            _rx(r"traceback", r"unhandled exception", r"application exception", r"exception:"),
+        ),
+        default_evidence=("Application raised an unhandled exception",),
         verification_checks=(
-            "Collect kubectl describe + previous logs",
-            "Check recent deploys and config changes",
+            "Inspect previous container logs for the stack trace",
+            "Identify the failing code path and recent deploy",
+            "Reproduce crash locally with the same config",
         ),
         remediation_key="Application Bug / Unhandled Exception",
     ),
     HypothesisCandidate(
-        cause="Dependency unavailable",
-        slug="dependency_unavailable_unknown",
-        prior=0.35,
+        cause="Fatal runtime error",
+        slug="fatal_runtime_error",
+        prior=0.25,
         patterns=(
-            _rx(r"connection refused", r"no such host", r"i/o timeout", r"could not connect"),
+            _rx(r"panic", r"fatal error", r"segmentation fault"),
         ),
-        default_evidence=("Possible dependency connectivity failure",),
+        default_evidence=("Fatal runtime signal observed in application logs",),
         verification_checks=(
-            "Check dependent Service/Endpoints",
-            "Verify DNS and network policies",
+            "Inspect panic/fatal stack output from previous container logs",
+            "Check for native dependency/runtime mismatch in the latest release",
         ),
-        remediation_key="Dependency Unavailable (DNS/Network)",
+        remediation_key="Application Bug / Unhandled Exception",
     ),
     HypothesisCandidate(
-        cause="Misconfigured workload",
-        slug="misconfigured_workload",
-        prior=0.25,
-        patterns=(_rx(r"failedmount|configmap|secret|invalid"),),
-        default_evidence=("Workload configuration may be incorrect",),
-        verification_checks=(
-            "Review pod events for FailedMount/Failed scheduling",
-            "Validate references to Secrets/ConfigMaps/volumes",
+        cause="Startup regression after deploy",
+        slug="startup_regression",
+        prior=0.15,
+        patterns=(
+            _rx(r"startup", r"crashloopbackoff", r"back-?off restarting failed container"),
         ),
-        remediation_key="Missing Secret",
+        default_evidence=("Crash loop started after application startup path changed",),
+        verification_checks=(
+            "Check deployment timeline for recent application changes",
+            "Rollback to last known-good revision and verify recovery",
+        ),
+        remediation_key="Application Bug / Unhandled Exception",
     ),
 )
 
+
 CANDIDATES_BY_CATEGORY: dict[str, tuple[HypothesisCandidate, ...]] = {
     "OOMKilled": OOM_CANDIDATES,
-    "Invalid Image": INVALID_IMAGE_CANDIDATES,
-    "Missing Secret": MISSING_SECRET_CANDIDATES,
-    "Application Crash": APPLICATION_CRASH_CANDIDATES,
-    "Unknown": UNKNOWN_CANDIDATES,
+    "Invalid Configuration": INVALID_CONFIGURATION_CANDIDATES,
+    "Application Failure": APPLICATION_FAILURE_CANDIDATES,
+    # Backward-compatible aliases for older scenario fixtures.
+    "Missing Secret": INVALID_CONFIGURATION_CANDIDATES,
+    "Invalid Image": INVALID_CONFIGURATION_CANDIDATES,
+    "Application Crash": APPLICATION_FAILURE_CANDIDATES,
+    "Unknown": APPLICATION_FAILURE_CANDIDATES,
 }

@@ -1,4 +1,4 @@
-"""Expected-evidence specs for existing hypothesis causes (no new categories)."""
+"""Expected-evidence specs for hypothesis causes."""
 
 from __future__ import annotations
 
@@ -64,72 +64,39 @@ VERIFICATION_SPECS: dict[str, VerificationSpec] = {
             _rx(r"request rate stable|no traffic|zero requests"),
         ),
     ),
-    "Wrong image tag": VerificationSpec(
-        expected_evidence=("Image manifest/tag cannot be resolved",),
-        support_patterns=(_rx(r"manifest unknown", r"wrong tag|invalid tag"),),
-        contradict_patterns=(_rx(r"unauthorized|authentication required|pull access denied"),),
-    ),
-    "Image deleted or repository missing": VerificationSpec(
-        expected_evidence=("Registry reports repository/image missing",),
-        support_patterns=(_rx(r"repository does not exist", r"image not found"),),
-        contradict_patterns=(_rx(r"unauthorized|authentication required"),),
-    ),
-    "Missing registry credentials": VerificationSpec(
-        expected_evidence=("Registry authentication / pull access failure",),
-        support_patterns=(
-            _rx(r"unauthorized|authentication required|pull access denied|imagepullsecret"),
-        ),
-        contradict_patterns=(_rx(r"manifest unknown"),),
-    ),
     "Secret not created": VerificationSpec(
         expected_evidence=("Referenced secret does not exist",),
-        support_patterns=(_rx(r"secret .* not found", r"does not exist"),),
+        support_patterns=(_rx(r"secret .* not found", r"secret missing", r"failedmount"),),
         contradict_patterns=(_rx(r"\bsecret exists\b", r"\bsecret is present\b"),),
-    ),
-    "Wrong secret name or namespace": VerificationSpec(
-        expected_evidence=("Secret reference points to wrong name/namespace",),
-        support_patterns=(_rx(r"wrong namespace|namespace mismatch|name mismatch|misreferenc"),),
-        contradict_patterns=(),
-    ),
-    "Incorrect volume or envFrom mount": VerificationSpec(
-        expected_evidence=("Secret volume/envFrom mount path is incorrect",),
-        support_patterns=(
-            _rx(r"envfrom|wrong mount path|cannot open .*secrets|no such file.*secrets"),
-        ),
-        contradict_patterns=(_rx(r"secret .* not found"),),
-    ),
-    "Unhandled exception in application": VerificationSpec(
-        expected_evidence=("Stack trace / unhandled exception in logs",),
-        support_patterns=(_rx(r"traceback|unhandled exception|exception:"),),
-        contradict_patterns=(_rx(r"failed to load config|environment variable.*not set"),),
     ),
     "Bad configuration": VerificationSpec(
         expected_evidence=("Config parse/validation error",),
         support_patterns=(
-            _rx(r"failed to load config|invalid configuration|\byaml:\b|\bjson:\b"),
+            _rx(r"failed to load config|invalid configuration|configuration missing|\byaml:\b|\byaml parse error\b|\bjson:\b|keyerror"),
         ),
         contradict_patterns=(_rx(r"traceback|unhandled exception"),),
     ),
     "Missing environment variable": VerificationSpec(
         expected_evidence=("Required environment variable is unset",),
         support_patterns=(
-            _rx(r"environment variable.*(?:missing|not set)|required .* env"),
+            _rx(r"environment variable.*(?:missing|not set)|required .* env|keyerror"),
         ),
         contradict_patterns=(_rx(r"traceback \(most recent"),),
     ),
-    "Application crash on startup": VerificationSpec(
-        expected_evidence=("Process exits during startup",),
-        support_patterns=(_rx(r"traceback|panic:|fatal:|exit status|exit code"),),
+    "Unhandled exception in application": VerificationSpec(
+        expected_evidence=("Stack trace / unhandled exception in logs",),
+        support_patterns=(_rx(r"traceback|unhandled exception|application exception|exception:"),),
+        contradict_patterns=(_rx(r"failed to load config|environment variable.*not set"),),
     ),
-    "Dependency unavailable": VerificationSpec(
-        expected_evidence=("Dependency connectivity / DNS failure",),
-        support_patterns=(
-            _rx(r"connection refused|no such host|i/o timeout|could not connect"),
-        ),
+    "Fatal runtime error": VerificationSpec(
+        expected_evidence=("Panic/fatal runtime signal in logs",),
+        support_patterns=(_rx(r"panic|fatal error|segmentation fault"),),
+        contradict_patterns=(_rx(r"invalid configuration|missing environment variable"),),
     ),
-    "Misconfigured workload": VerificationSpec(
-        expected_evidence=("Workload references missing or invalid config objects",),
-        support_patterns=(_rx(r"failedmount|configmap|secret .* not found|invalid"),),
+    "Startup regression after deploy": VerificationSpec(
+        expected_evidence=("Crash loop started after recent startup-path change",),
+        support_patterns=(_rx(r"startup|back-?off restarting|crashloopbackoff"),),
+        contradict_patterns=(),
     ),
 }
 

@@ -154,23 +154,13 @@ def make_incident(*, seed: int, idx: int) -> CrashLoopBackOffIncident:
     category = _pick(
         rng,
         [
-            # Invalid Image
-            "invalid_image_wrong_tag",
-            "invalid_image_deleted_image",
-            "invalid_image_private_registry_auth",
-            # Application Failure
+            # Scoped CrashLoopBackOff causes:
+            # OOMKilled / Invalid Configuration / Application Failure.
+            "oom",
             "missing_secret",
             "missing_env_var",
             "bad_config",
             "startup_exception",
-            # Resource Failure
-            "oom",
-            "disk_pressure",
-            "cpu_starvation",
-            # Dependency Failure
-            "dependency_database_unavailable",
-            "dependency_redis_unavailable",
-            "dependency_dns_failure",
         ],
     )
 

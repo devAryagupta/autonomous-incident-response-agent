@@ -30,10 +30,10 @@ def _base_state(*, logs: list[str], events: list[str], diagnosis: Diagnosis) -> 
 
 def test_verify_confirms_secret_and_updates_posterior() -> None:
     diagnosis = Diagnosis(
-        summary="Missing Secret",
-        category="Missing Secret",
+        summary="Invalid Configuration",
+        category="Invalid Configuration",
         confidence=0.85,
-        evidence=[Evidence(source="events", text="Missing secret / FailedMount secret detected")],
+        evidence=[Evidence(source="events", text="Secret missing")],
     )
     state = _base_state(
         diagnosis=diagnosis,
