@@ -168,6 +168,11 @@ class SyntheticObservationProvider:
                 summary = f"Pod health for {request.target}: unknown (pre-execution)"
                 data["ready"] = False
 
+        elif query == "deployment_rollout_history":
+            # Stage-0 synthetic fixtures usually do not include rollout timeline context.
+            summary = f"Deployment rollout history unavailable for {request.target}"
+            data["available"] = False
+
         elif query in {
             "pod_container_statuses",
             "image_pull_secrets",

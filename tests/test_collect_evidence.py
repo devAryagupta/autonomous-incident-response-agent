@@ -4,7 +4,9 @@ from incident_agent.contracts import (
     Alert,
     Diagnosis,
     Evidence,
+    EvidenceResult,
     EvidenceRequest,
+    Hypothesis,
     IncidentState,
     Observations,
 )
@@ -13,6 +15,9 @@ from incident_agent.nodes.collect_evidence import collect_evidence
 from incident_agent.nodes.hypothesize import hypothesize
 from incident_agent.nodes.verify_hypotheses import verify_hypotheses
 from incident_agent.providers import (
+    DryRunExecutionProvider,
+    NoMemoryProvider,
+    ProviderBundle,
     SyntheticMetricsProvider,
     SyntheticObservationProvider,
     default_providers,
@@ -121,3 +126,88 @@ def test_collected_evidence_feeds_verification() -> None:
     assert hyps[0].description == "Memory leak"
     assert verifications["Memory leak"].result == "confirmed"
     assert any("900Mi" in e for e in verifications["Memory leak"].observed_evidence)
+
+
+def test_provider_evidence_can_confirm_hypothesis_without_hypothesis_injection() -> None:
+    class _InjectedTracebackProvider(SyntheticObservationProvider):
+        def execute_evidence_request(
+            self,
+            request: EvidenceRequest,
+            *,
+            state: IncidentState,
+        ) -> EvidenceResult:
+            if request.query == "previous_container_logs":
+                return EvidenceResult(
+                    request_id=request.request_id,
+                    type=request.type,
+                    query=request.query,
+                    target=request.target,
+                    success=True,
+                    summary=(
+                        "Traceback (most recent call last):; "
+                        "Unhandled exception in bootstrap()"
+                    ),
+                    data={
+                        "provider": "synthetic-test",
+                        "query": request.query,
+                        "lines": [
+                            "Traceback (most recent call last):",
+                            "Unhandled exception in bootstrap()",
+                        ],
+                    },
+                )
+            return super().execute_evidence_request(request, state=state)
+
+    state = IncidentState(
+        incident_id="inc-evidence-provider-confirm",
+        created_at=datetime.now(tz=UTC),
+        alert=Alert(
+            alert_name="CrashLoopBackOff",
+            severity="critical",
+            starts_at=datetime.now(tz=UTC),
+            labels={"service": "api-gateway"},
+        ),
+        observations=Observations(
+            logs=[
+                "process exited unexpectedly",
+                "Exit Code: 1",
+            ],
+            events=["Warning BackOff pod/api-gateway Back-off restarting failed container"],
+            extra={"top_n": 2, "target_ref": "deployment/api-gateway"},
+        ),
+        diagnosis=Diagnosis(
+            summary="Application Failure",
+            category="Application Failure",
+            confidence=0.7,
+            evidence=[Evidence(source="other", text="generic crash")],
+        ),
+        hypotheses=[
+            Hypothesis(
+                hypothesis_id="h1-unhandled_exception",
+                description="Unhandled exception in application",
+                likelihood=1.0,
+                remediation_key="Application Bug / Unhandled Exception",
+            )
+        ],
+    )
+
+    before = verify_hypotheses(state)
+    before_v = before["hypothesis_verifications"][0]
+    assert before_v.result == "inconclusive"
+    assert not before_v.observed_required_evidence
+
+    providers = ProviderBundle(
+        observations=_InjectedTracebackProvider(),
+        metrics=SyntheticMetricsProvider(),
+        execution=DryRunExecutionProvider(),
+        memory=NoMemoryProvider(),
+    )
+    collected = collect_evidence(state, providers=providers)
+    state.evidence_requests = collected["evidence_requests"]  # type: ignore[assignment]
+    state.evidence_results = collected["evidence_results"]  # type: ignore[assignment]
+    state.observations = collected["observations"]  # type: ignore[assignment]
+
+    after = verify_hypotheses(state)
+    after_v = after["hypothesis_verifications"][0]
+    assert after_v.result == "confirmed"
+    assert any("traceback" in item.lower() for item in after_v.observed_required_evidence)

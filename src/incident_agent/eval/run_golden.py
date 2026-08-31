@@ -1,4 +1,4 @@
-"""Run Stage-0 agent over CrashLoop golden JSONL and record baseline metrics."""
+"""Run Stage-0 agent over CrashLoop golden JSONL and record reasoning traces."""
 
 from __future__ import annotations
 
@@ -7,12 +7,36 @@ import csv
 import json
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from typing import Literal
 
-from incident_agent.contracts import Alert, IncidentState, Observations
+from incident_agent.contracts import (
+    EvidenceRequest,
+    EvidenceResult,
+    Hypothesis,
+    HypothesisVerification,
+    IncidentState,
+    RemediationOption,
+)
 from incident_agent.datasets.core import load_jsonl
 from incident_agent.datasets.crashloopbackoff.schema import CrashLoopBackOffIncident
 from incident_agent.eval.metrics import causes_match
-from incident_agent.graph import GRAPH
+from incident_agent.nodes import (
+    approve,
+    collect_evidence,
+    compute_confidence,
+    diagnose,
+    execute_fix,
+    hypothesize,
+    plan_fix,
+    pre_execute_validate,
+    prepare_execution,
+    validate_fix,
+    verify_hypotheses,
+    verify_outcome,
+)
+from incident_agent.nodes.enrich import enrich
+from incident_agent.providers import ProviderBundle, default_providers
+from incident_agent.routing import bump_replan, finalize, route_on_confidence
 
 DEFAULT_GOLDEN_DATASET = (
     "data/synthetic/crashloopbackoff/goldendataset/crashloop_golden_dataset.jsonl"
@@ -32,6 +56,102 @@ class GoldenRunRow:
     final_confidence: float | None
 
 
+@dataclass(frozen=True, slots=True)
+class HypothesisSnapshot:
+    hypothesis_id: str
+    description: str
+    likelihood: float
+    remediation_key: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class EvidenceRequestSnapshot:
+    request_id: str
+    hypothesis_id: str | None
+    type: str
+    query: str
+    target: str
+    rationale: str
+
+
+@dataclass(frozen=True, slots=True)
+class EvidenceResultSnapshot:
+    request_id: str
+    type: str
+    query: str
+    success: bool
+    summary: str
+    data: dict
+
+
+@dataclass(frozen=True, slots=True)
+class VerificationSnapshot:
+    hypothesis_id: str
+    hypothesis: str
+    result: str
+    supporting_evidence: list[str]
+    contradicting_evidence: list[str]
+    required_evidence: list[str]
+    observed_supporting_evidence: list[str]
+    observed_contradicting_evidence: list[str]
+    observed_required_evidence: list[str]
+    expected_evidence: list[str]
+    observed_evidence: list[str]
+    confidence_delta: float
+
+
+@dataclass(frozen=True, slots=True)
+class RemediationOptionSnapshot:
+    option_id: str
+    action: str
+    hypothesis_id: str | None
+    confidence: float
+    safety_score: float
+    risk: str
+    blast_radius: str
+    reversibility: str
+    rollback_possible: bool
+
+
+@dataclass(frozen=True, slots=True)
+class ReasoningPassSnapshot:
+    pass_index: int
+    route_decision: Literal["end", "replan"]
+    initial_hypotheses: list[HypothesisSnapshot]
+    evidence_requests: list[EvidenceRequestSnapshot]
+    evidence_results: list[EvidenceResultSnapshot]
+    verification_results: list[VerificationSnapshot]
+    posterior_hypotheses: list[HypothesisSnapshot]
+    selected_hypothesis_id: str | None
+    selected_hypothesis: str | None
+    remediation_options: list[RemediationOptionSnapshot]
+    selected_remediation_id: str | None
+    selected_remediation: str | None
+    confidence_score: float | None
+    confidence_explanation: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class GoldenReasoningTrace:
+    incident_id: str
+    scenario_category: str
+    diagnosis_category: str | None
+    diagnosis_summary: str | None
+    diagnosis_confidence: float | None
+    diagnosis_evidence: list[str]
+    expected_root_cause: str
+    expected_hypothesis: str
+    expected_fix_kind: str | None
+    predicted_hypothesis: str | None
+    predicted_fix_kind: str | None
+    diagnosis_correct: bool
+    fix_correct: bool
+    final_confidence: float | None
+    replan_count: int
+    route: str | None
+    reasoning_passes: list[ReasoningPassSnapshot]
+
+
 def _normalize_kind(value: str | None) -> str:
     if not value:
         return ""
@@ -46,6 +166,8 @@ def _fix_kinds_match(predicted: str | None, expected: str | None) -> bool:
 
 def state_from_incident(incident: CrashLoopBackOffIncident) -> IncidentState:
     """Build initial IncidentState the same way as ``run_pipeline.py``."""
+    from incident_agent.contracts import Alert, Observations
+
     state = IncidentState(
         incident_id=incident.incident_id,
         created_at=incident.created_at,
@@ -120,15 +242,256 @@ def row_from_run(incident: CrashLoopBackOffIncident, state: IncidentState) -> Go
     )
 
 
+def _apply_updates(state: IncidentState, updates: dict[str, object]) -> None:
+    for key, value in updates.items():
+        setattr(state, key, value)
+
+
+def _hypothesis_snapshots(hypotheses: list[Hypothesis]) -> list[HypothesisSnapshot]:
+    return [
+        HypothesisSnapshot(
+            hypothesis_id=h.hypothesis_id,
+            description=h.description,
+            likelihood=float(h.likelihood),
+            remediation_key=h.remediation_key,
+        )
+        for h in hypotheses
+    ]
+
+
+def _request_snapshots(requests: list[EvidenceRequest]) -> list[EvidenceRequestSnapshot]:
+    return [
+        EvidenceRequestSnapshot(
+            request_id=r.request_id,
+            hypothesis_id=r.hypothesis_id,
+            type=str(r.type),
+            query=r.query,
+            target=r.target,
+            rationale=r.rationale,
+        )
+        for r in requests
+    ]
+
+
+def _result_snapshots(results: list[EvidenceResult]) -> list[EvidenceResultSnapshot]:
+    return [
+        EvidenceResultSnapshot(
+            request_id=r.request_id,
+            type=str(r.type),
+            query=r.query,
+            success=bool(r.success),
+            summary=r.summary,
+            data=dict(r.data),
+        )
+        for r in results
+    ]
+
+
+def _verification_snapshots(
+    verifications: list[HypothesisVerification],
+) -> list[VerificationSnapshot]:
+    return [
+        VerificationSnapshot(
+            hypothesis_id=v.hypothesis_id,
+            hypothesis=v.hypothesis,
+            result=v.result,
+            supporting_evidence=list(v.supporting_evidence),
+            contradicting_evidence=list(v.contradicting_evidence),
+            required_evidence=list(v.required_evidence),
+            observed_supporting_evidence=list(v.observed_supporting_evidence),
+            observed_contradicting_evidence=list(v.observed_contradicting_evidence),
+            observed_required_evidence=list(v.observed_required_evidence),
+            expected_evidence=list(v.expected_evidence),
+            observed_evidence=list(v.observed_evidence),
+            confidence_delta=float(v.confidence_delta),
+        )
+        for v in verifications
+    ]
+
+
+def _remediation_option_snapshots(
+    options: list[RemediationOption],
+) -> list[RemediationOptionSnapshot]:
+    return [
+        RemediationOptionSnapshot(
+            option_id=o.option_id,
+            action=o.action,
+            hypothesis_id=o.hypothesis_id,
+            confidence=float(o.confidence),
+            safety_score=float(o.safety_score),
+            risk=o.risk.value,
+            blast_radius=str(o.blast_radius),
+            reversibility=str(o.reversibility),
+            rollback_possible=bool(o.rollback_possible),
+        )
+        for o in options
+    ]
+
+
+def _selected_hypothesis_description(state: IncidentState) -> str | None:
+    if not state.chosen_hypothesis_id:
+        return None
+    for hyp in state.hypotheses:
+        if hyp.hypothesis_id == state.chosen_hypothesis_id:
+            return hyp.description
+    return None
+
+
+def _selected_remediation_action(state: IncidentState) -> str | None:
+    if not state.chosen_remediation_id:
+        return None
+    for opt in state.remediation_options:
+        if opt.option_id == state.chosen_remediation_id:
+            return opt.action
+    return None
+
+
+def infer_expected_hypothesis(incident: CrashLoopBackOffIncident) -> str:
+    """
+    Approximate scenario-authored hypothesis label from category + root-cause prose.
+
+    The golden schema currently stores root-cause narrative + expected fix, but not
+    a dedicated hypothesis field.
+    """
+    category = incident.category
+    root = incident.root_cause.lower()
+    if category == "oom":
+        if "leak" in root:
+            return "Memory leak"
+        if "traffic spike" in root or "load" in root or "rps" in root:
+            return "Traffic spike"
+        return "Memory limit too low"
+    if category == "missing_env_var":
+        return "Missing environment variable"
+    if category == "bad_config":
+        return "Bad configuration"
+    if category == "missing_secret":
+        return "Secret not created"
+    if category in {"startup_exception", "app_bug_unhandled_exception"}:
+        if "panic" in root or "fatal" in root:
+            return "Fatal runtime error"
+        if "startup" in root:
+            return "Startup regression after deploy"
+        return "Unhandled exception in application"
+    return str(category)
+
+
+def run_incident_with_reasoning_trace(
+    incident: CrashLoopBackOffIncident,
+    *,
+    providers: ProviderBundle | None = None,
+) -> tuple[IncidentState, GoldenReasoningTrace]:
+    """Run full lifecycle and capture pass-by-pass reasoning artifacts."""
+    bundle = providers or default_providers()
+    state = state_from_incident(incident)
+
+    _apply_updates(state, enrich(state, providers=bundle))
+    _apply_updates(state, diagnose(state))
+
+    passes: list[ReasoningPassSnapshot] = []
+    pass_index = 0
+    while True:
+        pass_index += 1
+        _apply_updates(state, hypothesize(state))
+        initial_hypotheses = _hypothesis_snapshots(list(state.hypotheses))
+
+        _apply_updates(state, collect_evidence(state, providers=bundle))
+        evidence_requests = _request_snapshots(list(state.evidence_requests))
+        evidence_results = _result_snapshots(list(state.evidence_results))
+
+        _apply_updates(state, verify_hypotheses(state))
+        verification_results = _verification_snapshots(list(state.hypothesis_verifications))
+        posterior_hypotheses = _hypothesis_snapshots(list(state.hypotheses))
+
+        _apply_updates(state, plan_fix(state))
+        remediation_options = _remediation_option_snapshots(list(state.remediation_options))
+
+        _apply_updates(state, validate_fix(state))
+        _apply_updates(state, compute_confidence(state))
+        decision = route_on_confidence(state)
+
+        passes.append(
+            ReasoningPassSnapshot(
+                pass_index=pass_index,
+                route_decision=decision,
+                initial_hypotheses=initial_hypotheses,
+                evidence_requests=evidence_requests,
+                evidence_results=evidence_results,
+                verification_results=verification_results,
+                posterior_hypotheses=posterior_hypotheses,
+                selected_hypothesis_id=state.chosen_hypothesis_id,
+                selected_hypothesis=_selected_hypothesis_description(state),
+                remediation_options=remediation_options,
+                selected_remediation_id=state.chosen_remediation_id,
+                selected_remediation=_selected_remediation_action(state),
+                confidence_score=_final_confidence(state),
+                confidence_explanation=(
+                    state.confidence.explanation if state.confidence is not None else None
+                ),
+            )
+        )
+
+        if decision == "replan":
+            _apply_updates(state, bump_replan(state))
+            continue
+        break
+
+    _apply_updates(state, prepare_execution(state))
+    _apply_updates(state, pre_execute_validate(state))
+    _apply_updates(state, approve(state))
+    _apply_updates(state, execute_fix(state, providers=bundle))
+    _apply_updates(state, verify_outcome(state, providers=bundle))
+    _apply_updates(state, finalize(state, providers=bundle))
+
+    row = row_from_run(incident, state)
+    trace = GoldenReasoningTrace(
+        incident_id=incident.incident_id,
+        scenario_category=str(incident.category),
+        diagnosis_category=state.diagnosis.category if state.diagnosis else None,
+        diagnosis_summary=state.diagnosis.summary if state.diagnosis else None,
+        diagnosis_confidence=(
+            float(state.diagnosis.confidence) if state.diagnosis is not None else None
+        ),
+        diagnosis_evidence=(
+            [item.text for item in state.diagnosis.evidence] if state.diagnosis else []
+        ),
+        expected_root_cause=incident.root_cause,
+        expected_hypothesis=infer_expected_hypothesis(incident),
+        expected_fix_kind=incident.expected_fix.kind,
+        predicted_hypothesis=_selected_hypothesis_description(state),
+        predicted_fix_kind=row.predicted_fix_kind,
+        diagnosis_correct=row.diagnosis_correct,
+        fix_correct=row.fix_correct,
+        final_confidence=row.final_confidence,
+        replan_count=state.replan_count,
+        route=state.route,
+        reasoning_passes=passes,
+    )
+    return state, trace
+
+
 def run_golden_dataset(
     incidents: list[CrashLoopBackOffIncident],
 ) -> list[GoldenRunRow]:
-    """Run Stage-0 GRAPH over each incident; do not mutate agent logic."""
-    rows: list[GoldenRunRow] = []
-    for incident in incidents:
-        state = GRAPH.invoke(state_from_incident(incident))
-        rows.append(row_from_run(incident, state))
+    """Run Stage-0 lifecycle over each incident and return summary rows."""
+    rows, _ = run_golden_dataset_with_reasoning(incidents)
     return rows
+
+
+def run_golden_dataset_with_reasoning(
+    incidents: list[CrashLoopBackOffIncident],
+    *,
+    providers: ProviderBundle | None = None,
+) -> tuple[list[GoldenRunRow], list[GoldenReasoningTrace]]:
+    """Run full lifecycle over each incident and return (summary rows, traces)."""
+    bundle = providers or default_providers()
+    rows: list[GoldenRunRow] = []
+    traces: list[GoldenReasoningTrace] = []
+    for incident in incidents:
+        state, trace = run_incident_with_reasoning_trace(incident, providers=bundle)
+        rows.append(row_from_run(incident, state))
+        traces.append(trace)
+    return rows, traces
 
 
 def write_golden_report(rows: list[GoldenRunRow], *, out_json: Path, out_csv: Path | None) -> None:
@@ -145,11 +508,25 @@ def write_golden_report(rows: list[GoldenRunRow], *, out_json: Path, out_csv: Pa
                 writer.writerow(asdict(row))
 
 
+def write_reasoning_trace_report(
+    traces: list[GoldenReasoningTrace],
+    *,
+    out_json: Path,
+) -> None:
+    out_json.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "schema_version": "1",
+        "trace_count": len(traces),
+        "traces": [asdict(trace) for trace in traces],
+    }
+    out_json.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
         description=(
-            "Run Stage-0 agent (GRAPH) over CrashLoop golden JSONL and record "
-            "diagnosis/fix/validation/confidence per incident."
+            "Run Stage-0 agent over CrashLoop golden JSONL and record "
+            "diagnosis/fix metrics plus full reasoning traces."
         )
     )
     ap.add_argument(
@@ -160,21 +537,28 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument(
         "--out-json",
         default="artifacts/benchmarks/golden_stage0_run.json",
-        help="Where to write JSON report",
+        help="Where to write summary JSON report",
     )
     ap.add_argument(
         "--out-csv",
         default="artifacts/benchmarks/golden_stage0_run.csv",
-        help="Where to write CSV report (empty to skip)",
+        help="Where to write summary CSV report (empty to skip)",
+    )
+    ap.add_argument(
+        "--out-trace-json",
+        default="artifacts/benchmarks/golden_stage0_trace.json",
+        help="Where to write full reasoning trace JSON",
     )
     args = ap.parse_args(argv)
 
     incidents = load_jsonl(CrashLoopBackOffIncident, args.dataset, strict=True)
-    rows = run_golden_dataset(incidents)
+    rows, traces = run_golden_dataset_with_reasoning(incidents)
 
     out_json = Path(args.out_json)
     out_csv = Path(args.out_csv) if args.out_csv else None
+    out_trace_json = Path(args.out_trace_json)
     write_golden_report(rows, out_json=out_json, out_csv=out_csv)
+    write_reasoning_trace_report(traces, out_json=out_trace_json)
 
     n = len(rows)
     diag_ok = sum(1 for r in rows if r.diagnosis_correct)
@@ -185,6 +569,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"JSON: {out_json}")
     if out_csv:
         print(f"CSV:  {out_csv}")
+    print(f"TRACE: {out_trace_json}")
     print()
     for row in rows:
         print(
