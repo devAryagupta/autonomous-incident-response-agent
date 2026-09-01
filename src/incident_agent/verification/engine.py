@@ -19,31 +19,42 @@ _MEMORY_GROWTH_RE = re.compile(
 )
 
 # Bayes factors: prior odds × factor → posterior odds (then renormalize across set).
-_BF_CONFIRMED_STRONG = 4.0
+_BF_CONFIRMED_STRONG = 6.0
 _BF_CONFIRMED = 2.5
 _BF_INCONCLUSIVE = 0.85
-_BF_CONTRADICTED = 0.25
+_BF_MIXED = 0.65
+_BF_CONTRADICTED = 0.20
 
 
 @dataclass(frozen=True, slots=True)
 class _Challenge:
-    expected: tuple[str, ...]
-    observed: tuple[str, ...]
+    supporting_expected: tuple[str, ...]
+    contradicting_expected: tuple[str, ...]
+    required_expected: tuple[str, ...]
+    observed_supporting: tuple[str, ...]
+    observed_contradicting: tuple[str, ...]
+    observed_required: tuple[str, ...]
     result: str
     bayes_factor: float
 
 
 def _observation_lines(state: IncidentState) -> list[str]:
+    """
+    Verification inputs must be observation-derived only.
+
+    Allowed:
+    - raw logs/events
+    - provider-collected summaries already merged into observations
+    - provider metrics in observations.extra["metrics"]
+
+    Not allowed:
+    - hypothesis-derived evidence/defaults
+    - diagnosis labels/summaries (derived interpretation)
+    """
     lines: list[str] = []
     obs = state.observations
     lines.extend(obs.logs)
     lines.extend(obs.events)
-    if state.diagnosis is not None:
-        lines.extend(e.text for e in state.diagnosis.evidence)
-        lines.append(state.diagnosis.summary)
-        lines.append(state.diagnosis.category)
-    for hyp in state.hypotheses:
-        lines.extend(e.text for e in hyp.evidence)
     metrics = obs.extra.get("metrics")
     if isinstance(metrics, dict):
         for key, value in metrics.items():
@@ -66,6 +77,35 @@ def _collect_hits(lines: list[str], patterns: tuple[re.Pattern[str], ...]) -> li
                     hits.append(cleaned)
                 break
     return hits
+
+
+def _collect_required_hits(
+    lines: list[str],
+    patterns: tuple[re.Pattern[str], ...],
+) -> tuple[list[str], int]:
+    hits: list[str] = []
+    seen: set[str] = set()
+    matched_patterns = 0
+    for pat in patterns:
+        for line in lines:
+            if pat.search(line):
+                matched_patterns += 1
+                cleaned = line.strip()
+                if cleaned and cleaned not in seen:
+                    seen.add(cleaned)
+                    hits.append(cleaned)
+                break
+    return hits, matched_patterns
+
+
+def _dedupe(values: list[str]) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        if value not in seen:
+            seen.add(value)
+            out.append(value)
+    return out
 
 
 def _memory_growth_observations(lines: list[str], observations: Observations) -> list[str]:
@@ -109,44 +149,88 @@ def _challenge(
 ) -> _Challenge:
     support = _collect_hits(lines, spec.support_patterns)
     contradict = _collect_hits(lines, spec.contradict_patterns)
+    required, required_matches = _collect_required_hits(lines, spec.required_patterns)
 
     if hyp.description == "Memory leak":
-        support.extend(_memory_growth_observations(lines, observations))
+        growth = _memory_growth_observations(lines, observations)
+        support.extend(growth)
+        required.extend(growth)
+        if growth and spec.required_patterns:
+            required_matches = max(required_matches, 1)
 
-    # Dedup support after growth merge.
-    deduped_support: list[str] = []
-    seen: set[str] = set()
-    for item in support:
-        if item not in seen:
-            seen.add(item)
-            deduped_support.append(item)
+    deduped_support = _dedupe(support)
+    deduped_contradict = _dedupe(contradict)
+    deduped_required = _dedupe(required)
+    has_support = bool(deduped_support)
+    has_contradict = bool(deduped_contradict)
+    has_required_signal = bool(deduped_required)
+    required_total = len(spec.required_patterns)
+    required_satisfied = required_total > 0 and required_matches >= required_total
 
-    if deduped_support and not contradict:
-        strong = len(deduped_support) >= 2 or any("increased from" in s.lower() for s in deduped_support)
+    if required_satisfied and not has_contradict:
+        strong = len(deduped_required) >= 2 or len(deduped_support) >= 2
         return _Challenge(
-            expected=spec.expected_evidence,
-            observed=tuple(deduped_support[:4]),
+            supporting_expected=spec.supporting_evidence,
+            contradicting_expected=spec.contradicting_evidence,
+            required_expected=spec.required_evidence,
+            observed_supporting=tuple(deduped_support[:4]),
+            observed_contradicting=tuple(deduped_contradict[:4]),
+            observed_required=tuple(deduped_required[:4]),
             result="confirmed",
-            bayes_factor=_BF_CONFIRMED_STRONG if strong else _BF_CONFIRMED,
+            bayes_factor=_BF_CONFIRMED_STRONG if strong else (_BF_CONFIRMED + 1.0),
         )
-    if contradict and not deduped_support:
+    if has_required_signal and not has_contradict:
         return _Challenge(
-            expected=spec.expected_evidence,
-            observed=tuple(contradict[:4]),
+            supporting_expected=spec.supporting_evidence,
+            contradicting_expected=spec.contradicting_evidence,
+            required_expected=spec.required_evidence,
+            observed_supporting=tuple(deduped_support[:4]),
+            observed_contradicting=tuple(deduped_contradict[:4]),
+            observed_required=tuple(deduped_required[:4]),
+            result="confirmed",
+            bayes_factor=_BF_CONFIRMED,
+        )
+    if has_support and not has_contradict:
+        return _Challenge(
+            supporting_expected=spec.supporting_evidence,
+            contradicting_expected=spec.contradicting_evidence,
+            required_expected=spec.required_evidence,
+            observed_supporting=tuple(deduped_support[:4]),
+            observed_contradicting=tuple(deduped_contradict[:4]),
+            observed_required=tuple(deduped_required[:4]),
+            result="confirmed",
+            bayes_factor=_BF_CONFIRMED,
+        )
+    if has_contradict and not has_support and not has_required_signal:
+        return _Challenge(
+            supporting_expected=spec.supporting_evidence,
+            contradicting_expected=spec.contradicting_evidence,
+            required_expected=spec.required_evidence,
+            observed_supporting=tuple(deduped_support[:4]),
+            observed_contradicting=tuple(deduped_contradict[:4]),
+            observed_required=tuple(deduped_required[:4]),
             result="contradicted",
             bayes_factor=_BF_CONTRADICTED,
         )
-    if contradict and deduped_support:
+    if has_contradict and (has_support or has_required_signal):
         # Mixed signals: do not reward; lean against the hypothesis.
         return _Challenge(
-            expected=spec.expected_evidence,
-            observed=tuple((deduped_support + contradict)[:4]),
+            supporting_expected=spec.supporting_evidence,
+            contradicting_expected=spec.contradicting_evidence,
+            required_expected=spec.required_evidence,
+            observed_supporting=tuple(deduped_support[:4]),
+            observed_contradicting=tuple(deduped_contradict[:4]),
+            observed_required=tuple(deduped_required[:4]),
             result="inconclusive",
-            bayes_factor=0.5,
+            bayes_factor=_BF_MIXED,
         )
     return _Challenge(
-        expected=spec.expected_evidence,
-        observed=(),
+        supporting_expected=spec.supporting_evidence,
+        contradicting_expected=spec.contradicting_evidence,
+        required_expected=spec.required_evidence,
+        observed_supporting=tuple(deduped_support[:4]),
+        observed_contradicting=tuple(deduped_contradict[:4]),
+        observed_required=tuple(deduped_required[:4]),
         result="inconclusive",
         bayes_factor=_BF_INCONCLUSIVE,
     )
@@ -194,12 +278,28 @@ def verify_hypotheses_from_state(
         posterior = _from_odds(_to_odds(prior) * challenge.bayes_factor)
         delta = round(posterior - prior, 4)
         raw_posteriors.append(posterior)
+        expected_evidence = list(
+            challenge.required_expected
+            if challenge.required_expected
+            else challenge.supporting_expected
+        )
+        observed_evidence = _dedupe(
+            list(challenge.observed_required)
+            + list(challenge.observed_supporting)
+            + list(challenge.observed_contradicting)
+        )
         verifications.append(
             HypothesisVerification(
                 hypothesis_id=hyp.hypothesis_id,
                 hypothesis=hyp.description,
-                expected_evidence=list(challenge.expected),
-                observed_evidence=list(challenge.observed),
+                supporting_evidence=list(challenge.supporting_expected),
+                contradicting_evidence=list(challenge.contradicting_expected),
+                required_evidence=list(challenge.required_expected),
+                observed_supporting_evidence=list(challenge.observed_supporting),
+                observed_contradicting_evidence=list(challenge.observed_contradicting),
+                observed_required_evidence=list(challenge.observed_required),
+                expected_evidence=expected_evidence,
+                observed_evidence=observed_evidence,
                 result=challenge.result,  # type: ignore[arg-type]
                 confidence_delta=delta,
             )

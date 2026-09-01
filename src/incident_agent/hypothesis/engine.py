@@ -57,14 +57,20 @@ def _infer_category(diagnosis: Diagnosis, context: list[str]) -> str:
         return "OOMKilled"
     if any(
         token in joined
-        for token in ("errimagepull", "imagepullbackoff", "manifest unknown", "failed to pull")
-    ) or "image" in summary:
-        return "Invalid Image"
-    if ("secret" in joined and "not found" in joined) or "missing secret" in summary:
-        return "Missing Secret"
-    if any(token in joined for token in ("traceback", "unhandled exception", "panic:")):
-        return "Application Crash"
-    return "Unknown"
+        for token in (
+            "missing environment variable",
+            "keyerror",
+            "configuration missing",
+            "yaml parse error",
+            "invalid configuration",
+            "secret missing",
+            "failedmount",
+        )
+    ) or "config" in summary:
+        return "Invalid Configuration"
+    if any(token in joined for token in ("traceback", "unhandled exception", "panic", "fatal error")):
+        return "Application Failure"
+    return "Application Failure"
 
 
 def _score_candidate(

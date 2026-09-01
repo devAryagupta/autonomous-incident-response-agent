@@ -11,7 +11,7 @@ def plan_fix(
     Plan-fix node (state-in, partial-state-out).
 
     Runs the Remediation Decision Engine: generate ranked RemediationOptions
-    (blast radius / reversibility / rollback / confidence), choose the safest,
+    (effectiveness + safety), choose the minimum effective safe action,
     and materialize a FixPlan for validation. Does not execute.
     """
     if not state.hypotheses:

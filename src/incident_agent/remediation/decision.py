@@ -1,4 +1,4 @@
-"""Remediation Decision Engine: rank safe options by blast radius / reversibility."""
+"""Remediation Decision Engine: choose minimum effective safe action."""
 
 from __future__ import annotations
 
@@ -25,9 +25,12 @@ _W_ROLLBACK = 0.15
 _W_RISK = 0.15
 _W_CONFIDENCE = 0.15
 
-# Options below this confidence are not considered "solutions" (avoids
-# low-blast / low-effect actions like restart winning over a real fix).
+# Minimum confidence needed for an option to be considered effective.
 _MIN_VIABLE_CONFIDENCE = 0.40
+# Effective-set floor: keep actions within this margin of the top confidence,
+# then choose the safest among them.
+_EFFECTIVENESS_MARGIN = 0.10
+_BLOCKED_INEFFECTIVE_RULE = "remediation_decision.v1:blocked_ineffective"
 
 
 @dataclass(frozen=True, slots=True)
@@ -137,7 +140,13 @@ def _plan_from_template(
     )
 
 
-def _noop_plan(*, hypothesis_id: str | None, target_ref: str) -> FixPlan:
+def _noop_plan(
+    *,
+    hypothesis_id: str | None,
+    target_ref: str,
+    rationale: str,
+    notes: str,
+) -> FixPlan:
     return FixPlan(
         hypothesis_id=hypothesis_id,
         remediation_option_id=None,
@@ -146,18 +155,18 @@ def _noop_plan(*, hypothesis_id: str | None, target_ref: str) -> FixPlan:
             FixAction(
                 action_type=FixActionType.NOOP,
                 target=target_ref,
-                params={},
-                rationale="No remediation option selected; require human investigation.",
+                params={"action": "noop_investigate"},
+                rationale=rationale,
             )
         ],
-        notes="Remediation decision engine produced no actionable option.",
+        notes=notes,
     )
 
 
 def decide_remediation(state: IncidentState) -> RemediationDecision:
     """
     Generate remediation candidates from verified hypotheses, score them for
-    minimum blast radius / high reversibility, and emit a FixPlan for the winner.
+    expected effectiveness + safety, and emit a FixPlan for the winner.
 
     Decision only — does not execute.
     """
@@ -191,30 +200,67 @@ def decide_remediation(state: IncidentState) -> RemediationDecision:
 
     if not scored:
         hyp0 = state.hypotheses[0]
-        plan = _noop_plan(hypothesis_id=hyp0.hypothesis_id, target_ref=target_ref)
+        plan = _noop_plan(
+            hypothesis_id=hyp0.hypothesis_id,
+            target_ref=target_ref,
+            rationale="No remediation option selected; require human investigation.",
+            notes="Remediation decision engine produced no actionable option.",
+        )
         return RemediationDecision(options=[], chosen=None, fix_plan=plan, matched_rule=None)
 
-    def _rank_key(pair: tuple[RemediationOption, RemediationTemplate]) -> tuple:
+    def _global_rank_key(pair: tuple[RemediationOption, RemediationTemplate]) -> tuple:
+        opt = pair[0]
+        return (
+            opt.confidence,
+            opt.safety_score,
+            -_LEVEL.get(opt.blast_radius, 0.5),
+            -_LEVEL.get(opt.risk.value, 0.5),
+        )
+
+    ranked_all = sorted(scored, key=_global_rank_key, reverse=True)
+    top_confidence = ranked_all[0][0].confidence
+    effective_floor = max(_MIN_VIABLE_CONFIDENCE, top_confidence - _EFFECTIVENESS_MARGIN)
+    effective = [pair for pair in ranked_all if pair[0].confidence >= effective_floor]
+    if not effective:
+        display = [opt for opt, _ in ranked_all]
+        blocked_plan = _noop_plan(
+            hypothesis_id=state.chosen_hypothesis_id,
+            target_ref=target_ref,
+            rationale=(
+                "No remediation option met minimum effectiveness; "
+                "collect more evidence or escalate for human approval."
+            ),
+            notes=(
+                f"No remediation option met effectiveness floor "
+                f"({effective_floor:.3f}); highest={top_confidence:.3f}."
+            ),
+        )
+        return RemediationDecision(
+            options=display,
+            chosen=None,
+            fix_plan=blocked_plan,
+            matched_rule=_BLOCKED_INEFFECTIVE_RULE,
+        )
+
+    def _effective_rank_key(pair: tuple[RemediationOption, RemediationTemplate]) -> tuple:
         opt = pair[0]
         return (
             opt.safety_score,
             -_LEVEL.get(opt.blast_radius, 0.5),
-            opt.confidence,
             -_LEVEL.get(opt.risk.value, 0.5),
+            opt.confidence,
         )
 
-    ranked_all = sorted(scored, key=_rank_key, reverse=True)
-    viable = [pair for pair in ranked_all if pair[0].confidence >= _MIN_VIABLE_CONFIDENCE]
-    ranked = viable if viable else ranked_all
+    ranked_effective = sorted(effective, key=_effective_rank_key, reverse=True)
 
-    # Re-order displayed options: chosen family first by decision rank among viable,
-    # then remaining by global safety (still show low-confidence alternatives).
-    chosen_ids = {opt.option_id for opt, _ in ranked}
-    display = [opt for opt, _ in ranked] + [
+    # Re-order displayed options: chosen family first (safest among effective),
+    # then remaining by global confidence+safety.
+    chosen_ids = {opt.option_id for opt, _ in ranked_effective}
+    display = [opt for opt, _ in ranked_effective] + [
         opt for opt, _ in ranked_all if opt.option_id not in chosen_ids
     ]
 
-    chosen, chosen_template = ranked[0]
+    chosen, chosen_template = ranked_effective[0]
     fix_plan = _plan_from_template(
         template=chosen_template,
         option=chosen,

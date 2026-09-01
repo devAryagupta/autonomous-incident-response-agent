@@ -58,7 +58,7 @@ def _oom_trace(**overrides: object) -> DecisionTrace:
 def test_diagnosis_accuracy_exact_and_alias() -> None:
     assert diagnosis_accuracy("OOMKilled", "OOMKilled") == 1.0
     assert diagnosis_accuracy("Memory leak", "OOMKilled") == 1.0
-    assert diagnosis_accuracy("Application Crash", "OOMKilled") == 0.0
+    assert diagnosis_accuracy("Application Failure", "OOMKilled") == 0.0
     assert diagnosis_accuracy(None, "OOMKilled") == 0.0
     assert causes_match("Resource Constraint (OOMKilled)", "oomkilled")
 
@@ -133,7 +133,7 @@ def test_evaluate_scenario_oom_happy_path() -> None:
 def test_unsafe_overconfident_unresolved_trace_scores_low() -> None:
     trace = _oom_trace(
         confirmed_hypothesis="Traffic spike",
-        predicted_diagnosis_category="Application Crash",
+        predicted_diagnosis_category="Application Failure",
         predicted_confidence=0.95,
         resolved=False,
         selected_action="scale_deployment",
@@ -154,8 +154,8 @@ def test_scorecard_aggregates_multiple_scenarios() -> None:
     bad = evaluate_scenario(
         _oom_trace(
             scenario_id="b",
-            confirmed_hypothesis="Application Crash",
-            predicted_diagnosis_category="Application Crash",
+            confirmed_hypothesis="Application Failure",
+            predicted_diagnosis_category="Application Failure",
             predicted_confidence=0.9,
             resolved=False,
             selected_action_risk=3,

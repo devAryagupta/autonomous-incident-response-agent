@@ -102,32 +102,27 @@ class HeuristicCrashLoopPredictor:
 def _canonical_cause(category: str) -> str:
     # Keep in sync with datasets.eval canonicalization.
     mapping = {
-        # Invalid Image
-        "invalid_image_wrong_tag": "Invalid Image Tag / Image Pull Error",
-        "invalid_image_deleted_image": "Invalid Image Tag / Image Pull Error",
-        "invalid_image_private_registry_auth": "Invalid Image Tag / Image Pull Error",
-        # Application Failure
-        "bad_config": "Bad Configuration / Config Parse Error",
-        "startup_exception": "Application Bug / Unhandled Exception",
-        # Resource Failure
-        "oom": "Resource Constraint (OOMKilled)",
-        "disk_pressure": "Resource Constraint (Disk Pressure / No Space)",
-        "cpu_starvation": "Resource Constraint (CPU Starvation)",
-        # Dependency Failure
-        "dependency_database_unavailable": "Database Unavailable",
-        "dependency_redis_unavailable": "Redis Unavailable",
-        "dependency_dns_failure": "DNS Resolution Failure",
-
-        # Legacy
-        "missing_secret": "Missing Secret",
-        "missing_env_var": "Missing Environment Variable",
-        "missing_configmap": "Missing ConfigMap",
-        "dependency_unavailable": "Dependency Unavailable (DNS/Network)",
-        "app_bug_unhandled_exception": "Application Bug / Unhandled Exception",
-        "resource_constraint_oom": "Resource Constraint (OOMKilled)",
-        "resource_constraint_cpu": "Resource Constraint (CPU Starvation)",
-        "misconfigured_volume_mount": "Misconfigured Volume Mount / Missing Path",
-        "bad_env_var_value": "Bad Environment Variable Value",
+        "oom": "OOMKilled",
+        "resource_constraint_oom": "OOMKilled",
+        "bad_config": "Invalid Configuration",
+        "missing_secret": "Invalid Configuration",
+        "missing_env_var": "Invalid Configuration",
+        "missing_configmap": "Invalid Configuration",
+        "misconfigured_volume_mount": "Invalid Configuration",
+        "bad_env_var_value": "Invalid Configuration",
+        "invalid_image_wrong_tag": "Invalid Configuration",
+        "invalid_image_deleted_image": "Invalid Configuration",
+        "invalid_image_private_registry_auth": "Invalid Configuration",
+        "invalid_image": "Invalid Configuration",
+        "startup_exception": "Application Failure",
+        "app_bug_unhandled_exception": "Application Failure",
+        "dependency_database_unavailable": "Application Failure",
+        "dependency_redis_unavailable": "Application Failure",
+        "dependency_dns_failure": "Application Failure",
+        "dependency_unavailable": "Application Failure",
+        "disk_pressure": "Application Failure",
+        "cpu_starvation": "Application Failure",
+        "resource_constraint_cpu": "Application Failure",
     }
     return mapping.get(category, category)
 

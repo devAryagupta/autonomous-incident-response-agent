@@ -71,8 +71,23 @@ def _print_one(incident: CrashLoopBackOffIncident) -> None:
         for v in state.hypothesis_verifications:
             delta = f"{v.confidence_delta:+.2f}"
             print(f"- {v.hypothesis}: {v.result} (delta {delta})")
+            if v.required_evidence:
+                print(f"  required: {', '.join(v.required_evidence)}")
+            if v.supporting_evidence:
+                print(f"  supports: {', '.join(v.supporting_evidence)}")
+            if v.contradicting_evidence:
+                print(f"  contradicts: {', '.join(v.contradicting_evidence)}")
             if v.expected_evidence:
                 print(f"  expected: {', '.join(v.expected_evidence)}")
+            if v.observed_required_evidence:
+                print(f"  observed_required: {', '.join(v.observed_required_evidence)}")
+            if v.observed_supporting_evidence:
+                print(f"  observed_support: {', '.join(v.observed_supporting_evidence)}")
+            if v.observed_contradicting_evidence:
+                print(
+                    "  observed_contradict: "
+                    f"{', '.join(v.observed_contradicting_evidence)}"
+                )
             if v.observed_evidence:
                 print(f"  observed: {', '.join(v.observed_evidence)}")
         print()

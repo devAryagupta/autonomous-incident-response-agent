@@ -70,6 +70,13 @@ class HypothesisVerification(ContractBase):
     schema_version: SchemaVersion = "1"
     hypothesis_id: str
     hypothesis: str
+    supporting_evidence: list[str] = Field(default_factory=list)
+    contradicting_evidence: list[str] = Field(default_factory=list)
+    required_evidence: list[str] = Field(default_factory=list)
+    observed_supporting_evidence: list[str] = Field(default_factory=list)
+    observed_contradicting_evidence: list[str] = Field(default_factory=list)
+    observed_required_evidence: list[str] = Field(default_factory=list)
+    # Backward-compatible aggregate fields.
     expected_evidence: list[str] = Field(default_factory=list)
     observed_evidence: list[str] = Field(default_factory=list)
     result: VerificationResult = "inconclusive"

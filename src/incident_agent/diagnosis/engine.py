@@ -1,4 +1,4 @@
-"""Deterministic diagnosis engine: observations → evidence → Diagnosis."""
+"""Deterministic diagnosis engine for scoped CrashLoopBackOff triage."""
 
 from __future__ import annotations
 
@@ -8,17 +8,13 @@ from incident_agent.contracts import Diagnosis, Evidence, Observations
 from incident_agent.diagnosis.evidence import ExtractedEvidence, extract_evidence
 
 CATEGORY_OOMKILLED = "OOMKilled"
-CATEGORY_INVALID_IMAGE = "Invalid Image"
-CATEGORY_MISSING_SECRET = "Missing Secret"
-CATEGORY_APPLICATION_CRASH = "Application Crash"
-CATEGORY_UNKNOWN = "Unknown"
+CATEGORY_INVALID_CONFIGURATION = "Invalid Configuration"
+CATEGORY_APPLICATION_FAILURE = "Application Failure"
 
 _SUMMARIES: dict[str, str] = {
-    CATEGORY_OOMKILLED: "Resource Constraint (OOMKilled)",
-    CATEGORY_INVALID_IMAGE: "Invalid Image Tag / Image Pull Error",
-    CATEGORY_MISSING_SECRET: "Missing Secret",
-    CATEGORY_APPLICATION_CRASH: "Application Bug / Unhandled Exception",
-    CATEGORY_UNKNOWN: "Insufficient evidence for a confident diagnosis",
+    CATEGORY_OOMKILLED: "OOMKilled",
+    CATEGORY_INVALID_CONFIGURATION: "Invalid Configuration",
+    CATEGORY_APPLICATION_FAILURE: "Application Failure",
 }
 
 
@@ -49,82 +45,73 @@ def _evidence_for(
 def _match_oom(extracted: ExtractedEvidence) -> _CauseMatch | None:
     if not extracted.has_oomkilled:
         return None
-    texts: list[str] = []
-    if any(i.text.startswith("Container terminated with exit code 137") for i in extracted.items):
-        texts.append("Container terminated with exit code 137")
-    if any("OOMKilled" in i.text for i in extracted.items):
-        texts.append("OOMKilled event detected")
-    if not texts:
-        texts = ["OOMKilled signal detected"]
-    confidence = 0.9 if len(texts) >= 2 else 0.85
-    return _CauseMatch(CATEGORY_OOMKILLED, confidence, tuple(texts))
-
-
-def _match_invalid_image(extracted: ExtractedEvidence) -> _CauseMatch | None:
-    if not extracted.has_image_pull_failure:
-        return None
     preferred = (
-        "ErrImagePull event detected",
-        "ImagePullBackOff event detected",
-        "Image manifest unknown",
-        "Image pull failure detected",
+        "OOMKilled event detected",
+        "Container terminated with exit code 137",
+        "Memory limit exceeded",
+        "Container killed",
+        "Exit code 137 indicates SIGKILL / OOMKilled",
     )
     texts = tuple(t for t in preferred if any(i.text == t for i in extracted.items))
     if not texts:
-        texts = ("Image pull failure detected",)
-    confidence = 0.9 if len(texts) >= 2 else 0.85
-    return _CauseMatch(CATEGORY_INVALID_IMAGE, confidence, texts)
+        texts = ("OOMKilled signal detected",)
+    confidence = 0.95 if len(texts) >= 3 else 0.9
+    return _CauseMatch(CATEGORY_OOMKILLED, confidence, texts)
 
 
-def _match_missing_secret(extracted: ExtractedEvidence) -> _CauseMatch | None:
-    if not extracted.has_missing_secret:
+def _match_invalid_configuration(extracted: ExtractedEvidence) -> _CauseMatch | None:
+    if not extracted.has_invalid_configuration:
         return None
-    return _CauseMatch(
-        CATEGORY_MISSING_SECRET,
-        0.85,
-        ("Missing secret / FailedMount secret detected",),
+    preferred = (
+        "Missing environment variable",
+        "KeyError",
+        "Configuration missing",
+        "YAML parse error",
+        "Invalid configuration",
+        "Secret missing",
+        "FailedMount",
     )
-
-
-def _match_application_crash(extracted: ExtractedEvidence) -> _CauseMatch | None:
-    if not extracted.has_application_crash:
-        return None
-    texts: list[str] = []
-    for item in extracted.items:
-        if item.text in {
-            "Application traceback detected",
-            "Application panic detected",
-            "Unhandled exception detected",
-            "Application crash pattern detected",
-        }:
-            texts.append(item.text)
-    for item in extracted.items:
-        if item.text.startswith("Container terminated with exit code"):
-            texts.append(item.text)
-            break
+    texts = tuple(t for t in preferred if any(i.text == t for i in extracted.items))
     if not texts:
-        texts = ["Application crash signal detected"]
-    # Stronger when we have stack/panic evidence vs exit-code-only.
-    has_stack = any("traceback" in t.lower() or "panic" in t.lower() or "exception" in t.lower() for t in texts)
-    confidence = 0.8 if has_stack else 0.7
-    return _CauseMatch(CATEGORY_APPLICATION_CRASH, confidence, tuple(texts[:3]))
+        texts = ("Configuration signal detected",)
+    confidence = 0.9 if len(texts) >= 2 else 0.82
+    return _CauseMatch(CATEGORY_INVALID_CONFIGURATION, confidence, texts)
+
+
+def _match_application_failure(extracted: ExtractedEvidence) -> _CauseMatch | None:
+    if not extracted.has_application_failure:
+        return None
+    preferred = (
+        "Unhandled exception",
+        "Traceback",
+        "panic",
+        "fatal error",
+        "application exception",
+    )
+    texts = tuple(t for t in preferred if any(i.text == t for i in extracted.items))
+    if not texts:
+        texts = ("Application failure signal detected",)
+    confidence = 0.88 if len(texts) >= 2 else 0.8
+    return _CauseMatch(CATEGORY_APPLICATION_FAILURE, confidence, texts)
 
 
 def _select_cause(extracted: ExtractedEvidence) -> _CauseMatch:
-    """Priority: OOM → Invalid Image → Missing Secret → Application Crash → Unknown."""
-    for matcher in (
-        _match_oom,
-        _match_invalid_image,
-        _match_missing_secret,
-        _match_application_crash,
-    ):
+    """Priority: OOMKilled → Invalid Configuration → Application Failure."""
+    for matcher in (_match_oom, _match_invalid_configuration, _match_application_failure):
         match = matcher(extracted)
         if match is not None:
             return match
+
+    if extracted.has_generic_failure and any(code not in (0, 137) for code in extracted.exit_codes):
+        return _CauseMatch(
+            CATEGORY_APPLICATION_FAILURE,
+            0.35,
+            ("Non-zero exit code observed (low diagnostic weight)",),
+        )
     return _CauseMatch(
-        CATEGORY_UNKNOWN,
+        CATEGORY_APPLICATION_FAILURE,
         0.3,
-        ("No matching CrashLoopBackOff failure pattern in logs/events",),
+        ("Insufficient specific evidence; generic crash signals only",),
     )
 
 
@@ -132,8 +119,8 @@ def diagnose_observations(observations: Observations) -> Diagnosis:
     """
     Observation → evidence extraction → deterministic Diagnosis.
 
-    Supports four CrashLoopBackOff causes only: OOMKilled, Invalid Image,
-    Missing Secret, Application Crash. No LLM / Kubernetes / Prometheus.
+    Scoped to three CrashLoopBackOff root causes:
+    OOMKilled, Invalid Configuration, Application Failure.
     """
     extracted = extract_evidence(observations)
     match = _select_cause(extracted)

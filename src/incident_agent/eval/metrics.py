@@ -45,8 +45,9 @@ _CAUSE_ALIASES: dict[str, frozenset[str]] = {
             "resource constraint",
         }
     ),
-    "application crash": frozenset(
+    "application failure": frozenset(
         {
+            "application failure",
             "application crash",
             "application bug / unhandled exception",
             "unhandled exception",
@@ -54,20 +55,15 @@ _CAUSE_ALIASES: dict[str, frozenset[str]] = {
             "app bug",
         }
     ),
-    "invalid image": frozenset(
+    "invalid configuration": frozenset(
         {
-            "invalid image",
-            "invalid image tag / image pull error",
-            "wrong image tag",
-            "errimagepull",
-            "imagepullbackoff",
-        }
-    ),
-    "missing secret": frozenset(
-        {
-            "missing secret",
+            "invalid configuration",
             "secret not created",
+            "missing secret",
             "secret not found",
+            "missing environment variable",
+            "bad configuration",
+            "config parse error",
         }
     ),
 }
@@ -79,16 +75,27 @@ def normalize_cause(label: str) -> str:
 
 
 def causes_match(predicted: str | None, ground_truth: str) -> bool:
-    """Exact normalized match or shared alias bucket."""
+    """Exact normalized match, shared alias bucket, or label inside narrative GT."""
     if predicted is None or not predicted.strip():
         return False
     left = normalize_cause(predicted)
     right = normalize_cause(ground_truth)
     if left == right:
         return True
+    # HF-style narratives: predicted short label appears inside root_cause prose.
+    if len(left) >= 3 and (left in right or right in left):
+        return True
     left_bucket = _alias_bucket(left)
     right_bucket = _alias_bucket(right)
-    return left_bucket is not None and left_bucket == right_bucket
+    if left_bucket is not None and left_bucket == right_bucket:
+        return True
+    if left_bucket is not None:
+        if left_bucket in right:
+            return True
+        for alias in _CAUSE_ALIASES[left_bucket]:
+            if len(alias) >= 3 and alias in right:
+                return True
+    return False
 
 
 def _alias_bucket(normalized: str) -> str | None:

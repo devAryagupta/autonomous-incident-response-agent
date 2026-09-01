@@ -154,3 +154,71 @@ def test_low_effectiveness_restart_does_not_beat_safer_fix() -> None:
     # Restart is lower blast radius but much lower confidence/effectiveness.
     assert decision.chosen.action == "rollback_deployment"
     assert decision.fix_plan.actions[0].action_type == FixActionType.ROLLBACK_DEPLOYMENT
+
+
+def test_minimum_effective_action_prefers_safer_when_effective_set_is_close() -> None:
+    hyps = [
+        Hypothesis(
+            hypothesis_id="h1-traffic_spike",
+            description="Traffic spike",
+            likelihood=0.70,
+            remediation_key="Resource Constraint (OOMKilled)",
+        ),
+        Hypothesis(
+            hypothesis_id="h2-memory_limit_too_low",
+            description="Memory limit too low",
+            likelihood=0.65,
+            remediation_key="Resource Constraint (OOMKilled)",
+        ),
+    ]
+    verifications = [
+        HypothesisVerification(
+            hypothesis_id="h1-traffic_spike",
+            hypothesis="Traffic spike",
+            result="confirmed",
+            confidence_delta=0.12,
+        ),
+        HypothesisVerification(
+            hypothesis_id="h2-memory_limit_too_low",
+            hypothesis="Memory limit too low",
+            result="confirmed",
+            confidence_delta=0.10,
+        ),
+    ]
+    decision = decide_remediation(_state_with_hyps(hyps, verifications=verifications))
+    assert decision.chosen is not None
+    assert decision.chosen.action == "increase_memory_limit"
+    assert decision.chosen.blast_radius == "low"
+    assert decision.chosen.confidence >= 0.4
+
+
+def test_blocks_when_no_option_meets_effectiveness_floor() -> None:
+    hyps = [
+        Hypothesis(
+            hypothesis_id="h1-fatal_runtime_error",
+            description="Fatal runtime error",
+            likelihood=0.4275,
+            remediation_key="Application Bug / Unhandled Exception",
+        )
+    ]
+    verifications = [
+        HypothesisVerification(
+            hypothesis_id="h1-fatal_runtime_error",
+            hypothesis="Fatal runtime error",
+            result="confirmed",
+            expected_evidence=["Panic/fatal runtime signal appears in logs"],
+            observed_evidence=["panic: startup initialization failed in bootstrap()"],
+            confidence_delta=0.3925,
+        )
+    ]
+
+    decision = decide_remediation(_state_with_hyps(hyps, verifications=verifications))
+
+    # rollback_deployment=0.342 and restart_pod=0.0855, both below 0.40 floor.
+    assert decision.chosen is None
+    assert decision.matched_rule == "remediation_decision.v1:blocked_ineffective"
+    assert [o.action for o in decision.options] == ["rollback_deployment", "restart_pod"]
+    assert decision.fix_plan.actions[0].action_type == FixActionType.NOOP
+    assert decision.fix_plan.actions[0].params["action"] == "noop_investigate"
+    assert decision.fix_plan.notes is not None
+    assert "effectiveness floor" in decision.fix_plan.notes

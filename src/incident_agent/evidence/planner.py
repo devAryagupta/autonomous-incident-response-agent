@@ -76,6 +76,16 @@ _NEEDS_BY_CAUSE: dict[str, tuple[_Need, ...]] = {
     "Unhandled exception in application": (
         _Need("log", "previous_container_logs", "Stack trace from previous container instance"),
     ),
+    "Fatal runtime error": (
+        _Need("log", "previous_container_logs", "Panic/fatal stack output from previous container"),
+    ),
+    "Startup regression after deploy": (
+        _Need(
+            "describe",
+            "deployment_rollout_history",
+            "Compare recent rollout revision/image to crash onset",
+        ),
+    ),
     "Bad configuration": (
         _Need("log", "previous_container_logs", "Config parse errors from previous logs"),
         _Need("describe", "configmap_refs", "ConfigMap / env value references"),
