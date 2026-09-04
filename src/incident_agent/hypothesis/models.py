@@ -27,7 +27,7 @@ class HypothesisState(HypothesisModelBase):
 
     id: str
     description: str
-    prior_probability: float = Field(ge=0.0, le=1.0)
-    posterior_probability: float = Field(ge=0.0, le=1.0)
+    prior_probability: float = Field(ge=0.0, le=1.0) # prior probability means the probability of the hypothesis before the evidence is considered.
+    posterior_probability: float = Field(ge=0.0, le=1.0) # posterior probability means the probability of the hypothesis after the evidence is considered.
     status: HypothesisStatus = HypothesisStatus.UNVERIFIED
     supporting_evidence: list[str] = Field(default_factory=list)

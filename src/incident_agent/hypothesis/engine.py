@@ -12,14 +12,41 @@ _PATTERN_BOOST = 0.35
 _DIAGNOSIS_EVIDENCE_BOOST = 0.10
 _MEMORY_EVIDENCE_NOTE = "Historical incident memory supports this cause"
 
+_OOM_TERMS = (
+    "oom",
+    "oomkilled",
+    "exit code 137",
+)
+_CONFIGURATION_TERMS = (
+    "missing environment variable",
+    "keyerror",
+    "configuration missing",
+    "yaml parse error",
+    "invalid configuration",
+    "secret missing",
+    "failedmount",
+)
+_OOM_PATTERN = re.compile(r"\boomkilled\b|\bexit (?:code|status) 137\b")
+_TRAFFIC_SIGNALS = (
+    "traffic spike",
+    "rps increased",
+    "qps increased",
+    "request rate increased",
+    "high request volume",
+)
+_STARTUP_SIGNALS = (
+    "startup",
+    "during start",
+)
 
+# function to normalize the score by dividing the score by the total score.
 def _normalize(scores: list[float]) -> list[float]:
     total = sum(scores)
     if total <= 0:
         return [1.0 / len(scores)] * len(scores) if scores else []
     return [s / total for s in scores]
 
-
+# Purpose of this function is to get the context lines from the state. Reading the diagnosis summary, category, evidence, logs, events, metrics.
 def _context_lines(state: IncidentState) -> list[str]:
     diagnosis = state.diagnosis
     lines: list[str] = []
@@ -34,7 +61,7 @@ def _context_lines(state: IncidentState) -> list[str]:
         lines.extend(f"{k}={v}" for k, v in metrics.items() if isinstance(v, (str, int, float)))
     return [line for line in lines if line]
 
-
+# Purpose of this function is to collect the hits from the list of lines that given by the output of the _context_lines function.
 def _collect_hits(lines: list[str], pat: re.Pattern[str], *, limit: int = 3) -> list[str]:
     out: list[str] = []
     for line in lines:
@@ -46,33 +73,26 @@ def _collect_hits(lines: list[str], pat: re.Pattern[str], *, limit: int = 3) -> 
                 break
     return out
 
+def _contains_any(text: str, terms: tuple[str, ...]) -> bool:
+    return any(term in text for term in terms)
+
 
 def _infer_category(diagnosis: Diagnosis, context: list[str]) -> str:
+    """Infer a category when the diagnosis does not provide one explicitly."""
     if diagnosis.category and diagnosis.category != "Unknown":
         return diagnosis.category
 
-    joined = "\n".join(context).lower()
     summary = diagnosis.summary.lower()
-    if "oom" in summary or "oomkilled" in joined or "exit code 137" in joined:
+    joined_context = "\n".join(context).lower()
+
+    if _contains_any(summary, _OOM_TERMS) or _contains_any(joined_context, _OOM_TERMS):
         return "OOMKilled"
-    if any(
-        token in joined
-        for token in (
-            "missing environment variable",
-            "keyerror",
-            "configuration missing",
-            "yaml parse error",
-            "invalid configuration",
-            "secret missing",
-            "failedmount",
-        )
-    ) or "config" in summary:
+    if _contains_any(joined_context, _CONFIGURATION_TERMS):
         return "Invalid Configuration"
-    if any(token in joined for token in ("traceback", "unhandled exception", "panic", "fatal error")):
-        return "Application Failure"
     return "Application Failure"
 
-
+# Purpose of this function is to score the candidate. Scoring the candidate by the prior probability, patterns, diagnosis evidence, and memory evidence.
+# Hypothesies Candidates are the possible suspects for the incident.
 def _score_candidate(
     cand: HypothesisCandidate,
     context: list[str],
@@ -81,8 +101,8 @@ def _score_candidate(
     score = cand.prior
     evidence_lines: list[str] = []
 
-    for pat in cand.patterns:
-        hits = _collect_hits(context, pat, limit=3)
+    for pattern in cand.patterns:
+        hits = _collect_hits(context, pattern, limit=3)
         if hits:
             score += _PATTERN_BOOST
             evidence_lines.extend(hits)
@@ -91,8 +111,8 @@ def _score_candidate(
         text = item.text.strip()
         if not text:
             continue
-        for pat in cand.patterns:
-            if pat.search(text):
+        for pattern in cand.patterns:
+            if pattern.search(text):
                 score += _DIAGNOSIS_EVIDENCE_BOOST
                 if text not in evidence_lines:
                     evidence_lines.append(text)
@@ -111,23 +131,32 @@ def _score_candidate(
 
 
 def _oom_prior_adjust(context: list[str]) -> dict[str, float]:
-    """SRE-style prior tilt for OOM: leak vs low limit vs traffic."""
+    """Heuristic score adjustments for competing OOM causes."""
     joined = "\n".join(context).lower()
-    oom_mentions = len(re.findall(r"oomkilled|exit code 137|exit status 137", joined))
+    oom_mentions = len(_OOM_PATTERN.findall(joined))
+
     adjustments = {
         "memory_leak": 0.0,
         "memory_limit_too_low": 0.0,
         "traffic_spike": 0.0,
     }
 
-    if oom_mentions >= 2 or "restart" in joined or "backoff" in joined:
+    repeated_oom = oom_mentions >= 2
+    restart_loop = "backoff" in joined
+    startup_oom = any(signal in joined for signal in _STARTUP_SIGNALS)
+    traffic_spike = any(signal in joined for signal in _TRAFFIC_SIGNALS)
+
+    if repeated_oom or restart_loop:
         adjustments["memory_leak"] += 0.20
         adjustments["memory_limit_too_low"] -= 0.05
-    if "startup" in joined or "during start" in joined:
+
+    if startup_oom:
         adjustments["memory_limit_too_low"] += 0.15
         adjustments["memory_leak"] -= 0.05
-    if any(token in joined for token in ("traffic", "spike", "rps", "qps", "requests")):
+
+    if traffic_spike:
         adjustments["traffic_spike"] += 0.25
+
     return adjustments
 
 

@@ -12,6 +12,7 @@ from incident_agent.calibration import (
     ConfidenceCalibrator,
     PredictionOutcome,
     blend_confidence,
+    empirical_bin_accuracy,
     execution_allowed,
     raw_would_allow_execution,
 )
@@ -142,6 +143,22 @@ def test_safety_gate_blocks_where_raw_confidence_would_allow() -> None:
     assert assessment.execution_gated is True
     assert execution_allowed(assessment) is False
     assert assessment.calibrated_confidence < threshold <= raw
+
+
+def test_empirical_bin_accuracy_half_open_and_includes_one() -> None:
+    history = [
+        PredictionOutcome(predicted_confidence=0.49, resolved=True),
+        PredictionOutcome(predicted_confidence=0.50, resolved=False),
+        PredictionOutcome(predicted_confidence=1.0, resolved=True),
+        PredictionOutcome(predicted_confidence=0.95, resolved=False),
+    ]
+    low = empirical_bin_accuracy(history, lo=0.0, hi=0.5)
+    assert low == pytest.approx(1.0)
+    mid = empirical_bin_accuracy(history, lo=0.5, hi=0.6)
+    assert mid == pytest.approx(0.0)
+    high = empirical_bin_accuracy(history, lo=0.9, hi=1.0)
+    assert high == pytest.approx(0.5)
+    assert empirical_bin_accuracy(history, lo=0.7, hi=0.8) is None
 
 
 def test_bin_scaling_bounds_overconfident_bin() -> None:

@@ -1,38 +1,45 @@
 """Extract scoped CrashLoopBackOff signals from logs/events/metrics."""
 
 from __future__ import annotations
-
+# import re is a regular expression module that is used to search for patterns in text.
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field 
+# dataclass is a decorator that is used to create a class that is used to store data.
+# similar to the all args constructor in the class.
+# field is a decorator that is used to create a field that is used to store data.
+# similar to the __init__ method in the class.
 from typing import Literal
 
 from incident_agent.contracts import Evidence, Observations
 
 EvidenceSource = Literal["logs", "events", "describe", "metrics", "config", "other"]
-
-_EXIT_CODE_RE = re.compile(
+# private variables are prefixed with an underscore.
+_EXIT_CODE_REGEX = re.compile(
     r"(?:exit(?:ed)?(?:\s+with)?(?:\s+status|\s+code)?|ExitCode)\s*[:=]?\s*(\d+)",
     re.IGNORECASE,
 )
-_REASON_RE = re.compile(
+# private variables are prefixed with an underscore.
+_REASON_REGEX = re.compile(
     r"(?:reason|lastState|terminated)\s*[:=]\s*([A-Za-z0-9_]+)",
     re.IGNORECASE,
 )
 
-_OOM_RE = re.compile(r"oomkilled|memory limit exceeded|out of memory|container killed", re.IGNORECASE)
-_CONFIG_RE = re.compile(
+_OOM_REGEX = re.compile(r"oomkilled|memory limit exceeded|out of memory|container killed", re.IGNORECASE)
+_CONFIG_REGEX = re.compile(
     r"missing environment variable|environment variable.*(?:missing|not set)|"
     r"keyerror|configuration missing|yaml parse error|invalid configuration|"
     r"secret missing|\bsecret\b.*\bnot found\b|failedmount",
     re.IGNORECASE,
 )
-_APP_FAILURE_RE = re.compile(
+_APP_FAILURE_REGEX = re.compile(
     r"unhandled exception|traceback|panic\b|fatal error|application exception",
     re.IGNORECASE,
 )
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True) 
+# frozen=True means that the class is immutable. now they are the readonly values.
+# slots=True means that the class is memory efficient. you can't add new attributes to the class.
 class ExtractedEvidence:
     """Normalized signals the diagnosis engine scores against."""
 
@@ -46,6 +53,8 @@ class ExtractedEvidence:
 
 
 @dataclass
+# private class is prefixed with an underscore.
+
 class _Accumulator:
     items: list[Evidence] = field(default_factory=list)
     exit_codes: list[int] = field(default_factory=list)
@@ -55,32 +64,39 @@ class _Accumulator:
     has_application_failure: bool = False
     has_generic_failure: bool = False
     _seen_text: set[str] = field(default_factory=set)
-
+    # add 
     def add(self, source: EvidenceSource, text: str) -> None:
+        # strip is a method that is used to remove the whitespace from the text. it is used to remove the leading and trailing whitespace.
         cleaned = text.strip()
+        # if the text is empty or the text is already in the seen text, return.
         if not cleaned or cleaned in self._seen_text:
+            # if the text is empty or the text is already in the seen text, return.
             return
         self._seen_text.add(cleaned)
         self.items.append(Evidence(source=source, text=cleaned))
 
 
 def _scan_line(acc: _Accumulator, source: EvidenceSource, line: str) -> None:
-    for match in _EXIT_CODE_RE.finditer(line):
+    for match in _EXIT_CODE_REGEX.finditer(line):
+        # finditer is a method that is used to find all the matches in the line.
+        # group(1) is the first group of the match.
+        
         code = int(match.group(1))
+
         if code not in acc.exit_codes:
             acc.exit_codes.append(code)
         acc.add(source, f"Container terminated with exit code {code}")
         if code != 0:
             acc.has_generic_failure = True
 
-    for match in _REASON_RE.finditer(line):
+    for match in _REASON_REGEX.finditer(line):
         reason = match.group(1)
         if reason not in acc.reasons:
             acc.reasons.append(reason)
         if reason and reason.lower() not in {"completed", "success"}:
             acc.has_generic_failure = True
 
-    if _OOM_RE.search(line):
+    if _OOM_REGEX.search(line):
         acc.has_oomkilled = True
         acc.add(source, "OOMKilled event detected")
         if "memory limit exceeded" in line.lower():
@@ -88,7 +104,7 @@ def _scan_line(acc: _Accumulator, source: EvidenceSource, line: str) -> None:
         if "container killed" in line.lower():
             acc.add(source, "Container killed")
 
-    if _CONFIG_RE.search(line):
+    if _CONFIG_REGEX.search(line):
         acc.has_invalid_configuration = True
         lower = line.lower()
         if "missing environment variable" in lower or "environment variable" in lower and "not set" in lower:
@@ -106,7 +122,7 @@ def _scan_line(acc: _Accumulator, source: EvidenceSource, line: str) -> None:
         elif "secret missing" in lower or ("secret" in lower and "not found" in lower):
             acc.add(source, "Secret missing")
 
-    if _APP_FAILURE_RE.search(line):
+    if _APP_FAILURE_REGEX.search(line):
         acc.has_application_failure = True
         lower = line.lower()
         if "traceback" in lower:

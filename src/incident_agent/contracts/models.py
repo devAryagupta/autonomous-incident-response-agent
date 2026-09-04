@@ -17,7 +17,9 @@ class ContractBase(BaseModel):
     """
 
     model_config = ConfigDict(extra="forbid", populate_by_name=True, validate_assignment=True)
-
+    # extra="forbid" means that extra fields are not allowed in the contract.
+    # populate_by_name=True means that the contract will be populated by the name of the field. used when the data is comming from the external source.
+    # validate_assignment=True means that the contract will be validated when the field is assigned or modified.
 
 class Alert(ContractBase):
     schema_version: SchemaVersion = "1"
@@ -44,7 +46,7 @@ class Evidence(ContractBase):
 class Diagnosis(ContractBase):
     schema_version: SchemaVersion = "1"
     summary: str
-    category: str = "Unknown"
+    category: str = "Unknown" # Unknown is the default category for the diagnosis.
     confidence: float = Field(ge=0.0, le=1.0)
     evidence: list[Evidence] = Field(default_factory=list)
 
@@ -54,6 +56,7 @@ class Hypothesis(ContractBase):
     hypothesis_id: str
     description: str
     likelihood: float = Field(ge=0.0, le=1.0)
+    # likelihood is the confidence that the hypothesis is true.
     evidence: list[Evidence] = Field(default_factory=list)
     # SRE checks the verification engine challenges against observations.
     verification_checks: list[str] = Field(default_factory=list)

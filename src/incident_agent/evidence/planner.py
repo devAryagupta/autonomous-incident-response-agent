@@ -8,14 +8,17 @@ from incident_agent.contracts import EvidenceRequest, IncidentState
 
 
 @dataclass(frozen=True, slots=True)
+
 class _Need:
-    type: str
-    query: str
-    rationale: str
+    type: str # type means the type of the evidence request. which provider to use to get the evidence.
+    query: str # query means the query to the evidence request. command to run to get the evidence.
+    rationale: str # rationale means the rationale for the evidence request. why we need this evidence.
 
 
 # Required evidence per existing hypothesis cause (verification-driven curiosity).
 _NEEDS_BY_CAUSE: dict[str, tuple[_Need, ...]] = {
+    # Hypothesis 1: Memory leak :- Memory trend /heap growth over time and repeated OOM / CrashLoop restart history . in case of memory leak, we need to check the memory trend and the restart history.
+
     "Memory leak": (
         _Need(
             "metric",
@@ -28,6 +31,7 @@ _NEEDS_BY_CAUSE: dict[str, tuple[_Need, ...]] = {
             "Repeated OOM / CrashLoop restart history",
         ),
     ),
+    # Hypothesis 2: Memory limit too low :- Configured memory requests/limits vs peak usage and Compare peak RSS to the configured limit. in case of memory limit too low, we need to check the memory requests/limits and the peak usage.
     "Memory limit too low": (
         _Need(
             "describe",
@@ -40,6 +44,7 @@ _NEEDS_BY_CAUSE: dict[str, tuple[_Need, ...]] = {
             "Compare peak RSS to the configured limit",
         ),
     ),
+    # Hypothesis 3: Traffic spike :- Request rate around the OOM window and Autoscaler / load-related events. in case of traffic spike, we need to check the request rate and the load-related events. hpa events are the events from the autoscaler
     "Traffic spike": (
         _Need(
             "metric",
@@ -48,10 +53,11 @@ _NEEDS_BY_CAUSE: dict[str, tuple[_Need, ...]] = {
         ),
         _Need(
             "event",
-            "hpa_events",
+            "hpa_events", # horizontal pod autoscaler events are the events from the autoscaler.
             "Autoscaler / load-related events",
         ),
     ),
+    # Hypothesis 4: Wrong image tag :- ErrImagePull / manifest resolution events and Container image reference and pull status. in case of wrong image tag, we need to check the image pull events and the container image reference and pull status.
     "Wrong image tag": (
         _Need("event", "image_pull_events", "ErrImagePull / manifest resolution events"),
         _Need("describe", "pod_container_statuses", "Container image reference and pull status"),
@@ -111,15 +117,21 @@ _NEEDS_BY_CAUSE: dict[str, tuple[_Need, ...]] = {
 
 def _target_ref(state: IncidentState) -> str:
     extra = state.observations.extra
-    if isinstance(extra.get("target_ref"), str) and extra["target_ref"]:
-        return str(extra["target_ref"])
+    target_ref = extra.get("target_ref")
+    if isinstance(target_ref, str) and target_ref:
+        return target_ref
+
     labels = state.alert.labels
     for key in ("service", "app", "workload", "deployment"):
-        if labels.get(key):
-            return str(labels[key])
-    if state.resource and state.resource.name:
-        kind = state.resource.kind or "workload"
-        return f"{kind}/{state.resource.name}"
+        value = labels.get(key)
+        if value:
+            return str(value)
+
+    resource = state.resource
+    if resource and resource.name:
+        kind = resource.kind or "workload"
+        return f"{kind}/{resource.name}"
+
     return state.alert.alert_name or "<workload>"
 
 
