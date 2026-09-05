@@ -119,7 +119,9 @@ def diagnose_observations(observations: Observations) -> Diagnosis:
     """
     Observation → evidence extraction → deterministic Diagnosis.
 
-    Scoped to three CrashLoopBackOff root causes:
+    This is the one-shot scope call. Replanning does not invoke it again.
+
+    Scoped to three CrashLoopBackOff families:
     OOMKilled, Invalid Configuration, Application Failure.
     """
     extracted = extract_evidence(observations)

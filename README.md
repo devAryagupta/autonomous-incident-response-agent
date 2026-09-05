@@ -59,7 +59,7 @@ If you care about **trustworthy automation for SRE**, this is the foundation we 
 |------|--------|--------|
 | CrashLoopBackOff synthetic dataset | **Done** | Generator + schema + fixtures; JSONL eval |
 | Deterministic diagnose / hypothesize / plan / validate | **Done** | Pure business nodes; no LLM required |
-| Evidence collection + Bayesian hypothesis verification | **Done** | Specs + evaluator loop |
+| Evidence collection + Bayesian hypothesis verification | **Done** | Live stack = specs + Bayes-factor belief update; separate OOM metric loop is library-only |
 | Confidence scoring + replan routing | **Done** | Threshold + `max_replans` |
 | Confidence calibration (mutation gate) | **Done** | Blends posterior × evidence × memory |
 | Local episode memory | **Done** | Priors / retrieval; runtime under `runtime/` |

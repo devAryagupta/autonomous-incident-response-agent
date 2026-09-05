@@ -23,15 +23,31 @@ Python aliases (same stored value, clearer name):
 
 ---
 
+## Diagnosis is scope, not a live cause
+
+`diagnose` runs **once** after enrich. The category (OOMKilled vs Invalid
+Configuration vs Application Failure) is the **incident scope**. Replanning
+does not call `diagnose` again; it re-ranks hypotheses inside that catalog.
+
+`Diagnosis.confidence` is certainty of that label, not a posterior over
+causes and not a reason to rebuild the graph.
+
+If later evidence drops the frozen family's signals and supports a different
+family, `Diagnosis.scope_valid` becomes false and routing escalates. Mixed
+evidence (original family still present) stays in the original scope.
+
+---
+
 ## Hypothesis belief
 
 `hypothesize` scores catalog priors against observations, then **normalizes** the
 top candidates so they sum to 1. Those values are **priors** (belief before the
 verification pass).
 
-`verify_hypotheses` treats that prior as `P(H)`, updates it with a Bayes factor
-from observed evidence, then **renormalizes** across the competing set. After
-that node, `Hypothesis.likelihood` is **posterior belief**.
+`verify_hypotheses` (live stack: `verification/engine.py`) treats that prior as
+`P(H)`, updates it with a **discrete Bayes factor** from regex hits, then
+**renormalizes** across the competing set. After that node,
+`Hypothesis.likelihood` is **posterior belief**.
 
 The field name `likelihood` is historical. In this codebase it means *current
 belief*, not the statistical likelihood `P(E|H)`.
@@ -40,9 +56,10 @@ belief*, not the statistical likelihood `P(E|H)`.
 hypothesis **before** cross-hypothesis renormalization. It is a belief change,
 not a second probability.
 
-The standalone OOM loop (`verification/loop.py`, `HypothesisState`) already uses
-`prior_probability` / `posterior_probability`. That loop is not the LangGraph
-payload; see cleanup task 4.
+A second implementation (`verification/loop.py` + `HypothesisState`) runs
+textbook `P(H|E) ∝ P(E|H) P(H)` on one OOM metric walkthrough. It is **not**
+on the graph and does **not** write `IncidentState`. Roles and limits:
+[VERIFICATION_STACKS.md](VERIFICATION_STACKS.md).
 
 ---
 
@@ -65,6 +82,20 @@ routing / gate score.
 
 `safety_score` then ranks *among* suitable options. It is also a heuristic.
 
+Catalog ``purpose`` is not a score. For a given cause, the same action is one of:
+
+| Purpose | Meaning |
+|---------|---------|
+| `root_cause` | Potential root-cause remediation |
+| `mitigation` | Symptom control; **not** a root-cause fix |
+| `temporary_recovery` | Service may come back; the cause is unchanged |
+| `investigate` | No automated change |
+
+Example: `increase_memory_limit` is `root_cause` for **Memory limit too low**
+and `mitigation` for **Memory leak**. `restart_pod` is always
+`temporary_recovery`. Memory may treat only `root_cause` as
+`root_cause_verified`.
+
 Do not feed `RemediationOption.confidence` into Brier scores, ECE, or
 `P(resolved)` calibration as if it were a probability of success.
 
@@ -86,3 +117,33 @@ That score decides replan vs enter the execution lifecycle. It is not claimed to
 be a well-calibrated probability. `ConfidenceCalibrator` is a separate library
 used when an explicit `CalibratedAssessment` is supplied; the default graph path
 does not run it as its own stage.
+
+---
+
+## Outcome layers (not one SUCCESS)
+
+Post-execution `OutcomeVerification.resolved` / `IncidentState.incident_resolved`
+means **the service recovered** (expected health outcomes were observed). That is
+not evidence the root cause was fixed.
+
+`ResolutionAssessment` records four layers:
+
+| Flag | Question | Stage-0 source |
+|------|----------|----------------|
+| `execution_success` | Did the command succeed? | `ExecutionResult.success` |
+| `service_recovered` | Did the service become healthy? | expected outcomes met |
+| `stable_recovery` | Did it remain healthy? | non-palliative action plus an explicit stability check (`restart count decreases`, `crashloop clears`, …). False when we only saw a snapshot after a restart. |
+| `root_cause_verified` | Was the cause addressed? | recovered service **and** the action is a known causal pair for the confirmed hypothesis |
+
+Restarting a leaking pod that comes back Ready:
+
+```text
+execution_success = true
+service_recovered = true
+stable_recovery = false
+root_cause_verified = false
+```
+
+Memory episode `SUCCESS` is derived only from `root_cause_verified`. Temporary
+recovery is `PARTIAL`. Prior boosts ignore episodes that are not
+`root_cause_verified`, so history cannot claim “restart fixes memory leak.”

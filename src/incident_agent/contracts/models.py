@@ -44,10 +44,14 @@ class Evidence(ContractBase):
 
 
 class Diagnosis(ContractBase):
-    """Symptom / category framing — not a posterior over root causes.
+    """Coarse incident scope — not a posterior over root causes.
 
-    ``confidence`` is heuristic certainty of the *label* (OOMKilled vs config vs
-    app failure). Competing-cause belief lives on ``Hypothesis.likelihood``.
+    Diagnosis runs once to lock the category (OOMKilled vs config vs app).
+    Replanning chooses among causes *inside* that scope; it does not re-diagnose.
+    If later evidence drops the frozen family's signals and supports another
+    family, ``scope_valid`` is set false and the run escalates.
+
+    ``confidence`` is heuristic certainty of the *label*, not P(cause).
     See docs/SCORE_SEMANTICS.md.
     """
 
@@ -60,6 +64,8 @@ class Diagnosis(ContractBase):
         description="Heuristic certainty of the diagnosis category, not P(cause).",
     )
     evidence: list[Evidence] = Field(default_factory=list)
+    scope_valid: bool = True
+    scope_invalid_reason: str = ""
 
 
 class Hypothesis(ContractBase):
@@ -170,6 +176,21 @@ class RiskLevel(StrEnum):
     HIGH = "high"
 
 
+class RemediationPurpose(StrEnum):
+    """What this action is for this cause — not how likely it is to work.
+
+    root_cause: potential root-cause remediation
+    mitigation: symptom control; not a root-cause fix
+    temporary_recovery: service may come back; cause is unchanged
+    investigate: no automated change
+    """
+
+    ROOT_CAUSE = "root_cause"
+    MITIGATION = "mitigation"
+    TEMPORARY_RECOVERY = "temporary_recovery"
+    INVESTIGATE = "investigate"
+
+
 ImpactLevel = Literal["low", "medium", "high"]
 
 
@@ -178,6 +199,7 @@ class RemediationOption(ContractBase):
 
     ``confidence`` is heuristic *suitability* (catalog weight × hypothesis
     belief), not a probability that the action will succeed.
+    ``purpose`` is mitigation vs root-cause vs temporary recovery for this cause.
     ``safety_score`` is a separate ranking heuristic. See docs/SCORE_SEMANTICS.md.
     """
 
@@ -205,6 +227,8 @@ class RemediationOption(ContractBase):
     safety_score: float = Field(ge=0.0, le=1.0, default=0.0)
     hypothesis_id: str | None = None
     rationale: str = ""
+    # Default investigate so hand-built options cannot claim a root-cause fix.
+    purpose: RemediationPurpose = RemediationPurpose.INVESTIGATE
 
     @property
     def suitability(self) -> float:
@@ -293,8 +317,26 @@ class ExecutionResult(ContractBase):
     finished_at: datetime | None = None
 
 
+class ResolutionAssessment(ContractBase):
+    """Four outcome layers. Service recovery is not root-cause resolution.
+
+    Stage 0 fills what the run can observe; ``stable_recovery`` stays false
+    unless a non-palliative action also met an explicit stability check.
+    """
+
+    schema_version: SchemaVersion = "1"
+    execution_success: bool = False
+    service_recovered: bool = False
+    stable_recovery: bool = False
+    root_cause_verified: bool = False
+
+
 class OutcomeVerification(ContractBase):
-    """Post-execution check: command success ≠ incident resolved."""
+    """Post-execution check: command success ≠ service recovered ≠ cause fixed.
+
+    ``resolved`` is service recovery (expected health outcomes met). The
+    four-layer ``assessment`` is what memory may learn from.
+    """
 
     schema_version: SchemaVersion = "1"
     resolved: bool
@@ -303,6 +345,7 @@ class OutcomeVerification(ContractBase):
     unmet_expectations: list[str] = Field(default_factory=list)
     evidence_summaries: list[str] = Field(default_factory=list)
     reason: str = ""
+    assessment: ResolutionAssessment = Field(default_factory=ResolutionAssessment)
 
 
 class ResourceRef(ContractBase):
@@ -370,7 +413,7 @@ class IncidentState(ContractBase):
     thread_id: str | None = None
     phase: IncidentPhase = "ingest"
     route: str | None = None
-    # Terminal hold: "NOOP" + INSUFFICIENT_CONFIDENCE when replans are exhausted.
+    # Terminal hold: NOOP + INSUFFICIENT_CONFIDENCE or DIAGNOSIS_SCOPE_INVALID.
     decision: str | None = None
     decision_reason: str | None = None
 

@@ -1,4 +1,8 @@
-"""Evidence specification catalog for hypothesis verification."""
+"""Regex evidence specs for the live graph belief update only.
+
+Consumed by ``verification/engine.py``. The standalone OOM loop does not
+read this catalog; it uses a hand-set P(E|H) matrix in ``bayesian.py``.
+"""
 
 from __future__ import annotations
 

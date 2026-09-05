@@ -1,4 +1,10 @@
-"""Hypothesis verification: challenge priors against observed evidence."""
+"""Two verification stacks — do not treat them as one system.
+
+Live graph: ``engine.verify_hypotheses_from_state`` + ``contracts.Hypothesis``.
+Standalone OOM demo: ``loop.run_bayesian_verification_loop`` + ``HypothesisState``.
+
+Roles and limits: docs/VERIFICATION_STACKS.md.
+"""
 
 from incident_agent.verification.bayesian import (
     LIKELIHOOD_CONTINUOUS_MEMORY_GROWTH,

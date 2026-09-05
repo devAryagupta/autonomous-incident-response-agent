@@ -1,10 +1,18 @@
-"""Remediation candidate templates (decision layer — no execution)."""
+"""Remediation candidate templates (decision layer — no execution).
+
+Each row is a cause → action pairing with an explicit purpose:
+
+- root_cause: potential root-cause remediation
+- mitigation: symptom control; not a root-cause fix
+- temporary_recovery: service may recover; the cause is unchanged
+- investigate: no automated change
+"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-from incident_agent.contracts import FixActionType, RiskLevel
+from incident_agent.contracts import FixActionType, RemediationPurpose, RiskLevel
 
 
 @dataclass(frozen=True, slots=True)
@@ -13,10 +21,12 @@ class RemediationTemplate:
 
     ``base_confidence`` (alias ``base_effectiveness``) is the catalog weight
     for how well this action fits the cause — not P(success).
+    ``purpose`` is mitigation vs root-cause vs temporary recovery for this cause.
     Suitability = base_effectiveness × current hypothesis belief (posterior).
     """
 
     action: str
+    purpose: RemediationPurpose
     expected_effect: str
     risk: RiskLevel
     blast_radius: str
@@ -38,6 +48,7 @@ class RemediationTemplate:
 def _t(
     *,
     action: str,
+    purpose: RemediationPurpose,
     expected_effect: str,
     risk: RiskLevel,
     blast_radius: str,
@@ -51,6 +62,7 @@ def _t(
 ) -> RemediationTemplate:
     return RemediationTemplate(
         action=action,
+        purpose=purpose,
         expected_effect=expected_effect,
         risk=risk,
         blast_radius=blast_radius,
@@ -65,13 +77,14 @@ def _t(
 
 
 # Keyed by hypothesis.description (SRE cause) with remediation_key fallbacks.
-# this is the list of the possible remediation options for a given cause.
 _OPTIONS_BY_CAUSE: dict[str, tuple[RemediationTemplate, ...]] = {
     "Memory leak": (
-        #_t is a helper function to create a RemediationTemplate object.
         _t(
             action="increase_memory_limit",
-            expected_effect="Prevent OOM while investigating the leak",
+            purpose=RemediationPurpose.MITIGATION,
+            expected_effect=(
+                "Mitigation: raise the limit so OOM is delayed. Not a root-cause fix."
+            ),
             risk=RiskLevel.MEDIUM,
             blast_radius="low",
             reversibility="high",
@@ -82,11 +95,14 @@ _OPTIONS_BY_CAUSE: dict[str, tuple[RemediationTemplate, ...]] = {
             commands=(
                 "kubectl -n <ns> set resources <workload> --limits=memory=512Mi --requests=memory=256Mi",
             ),
-            rationale="Lowest blast-radius mitigation: scoped to one workload and reversible.",
+            rationale="Purpose=mitigation. Memory still grows; this only buys time.",
         ),
         _t(
             action="rollback_deployment",
-            expected_effect="Restore previous revision if leak was introduced by a deploy",
+            purpose=RemediationPurpose.ROOT_CAUSE,
+            expected_effect=(
+                "Potential root-cause remediation: undo a revision that introduced the leak."
+            ),
             risk=RiskLevel.MEDIUM,
             blast_radius="medium",
             reversibility="medium",
@@ -95,11 +111,16 @@ _OPTIONS_BY_CAUSE: dict[str, tuple[RemediationTemplate, ...]] = {
             action_type=FixActionType.ROLLBACK_DEPLOYMENT,
             change="Rollback deployment to last known-good revision",
             commands=("kubectl -n <ns> rollout undo <workload>",),
-            rationale="Broader blast radius than a resource patch; use when deploy regression is likely.",
+            rationale=(
+                "Purpose=root_cause (potential). Only if the leak arrived with this deploy."
+            ),
         ),
         _t(
             action="restart_pod",
-            expected_effect="Temporary relief only; does not fix memory growth",
+            purpose=RemediationPurpose.TEMPORARY_RECOVERY,
+            expected_effect=(
+                "Temporary recovery only: pod may become Ready; the leak is unchanged."
+            ),
             risk=RiskLevel.LOW,
             blast_radius="low",
             reversibility="high",
@@ -108,13 +129,14 @@ _OPTIONS_BY_CAUSE: dict[str, tuple[RemediationTemplate, ...]] = {
             action_type=FixActionType.RESTART_POD,
             change="Restart the crashing pod",
             commands=("kubectl -n <ns> delete pod <pod>",),
-            rationale="Low risk but low effectiveness for a leak.",
+            rationale="Purpose=temporary_recovery. Not remediation and not mitigation of the leak.",
         ),
     ),
     "Memory limit too low": (
         _t(
             action="increase_memory_limit",
-            expected_effect="Prevent OOM",
+            purpose=RemediationPurpose.ROOT_CAUSE,
+            expected_effect="Potential root-cause remediation: size the limit to actual need.",
             risk=RiskLevel.MEDIUM,
             blast_radius="low",
             reversibility="high",
@@ -125,11 +147,12 @@ _OPTIONS_BY_CAUSE: dict[str, tuple[RemediationTemplate, ...]] = {
             commands=(
                 "kubectl -n <ns> set resources <workload> --limits=memory=512Mi --requests=memory=256Mi",
             ),
-            rationale="Direct fix for undersized limits with minimal blast radius.",
+            rationale="Purpose=root_cause. This addresses undersized limits, not a leak.",
         ),
         _t(
             action="restart_pod",
-            expected_effect="Retry startup; unlikely to fix chronic OOM",
+            purpose=RemediationPurpose.TEMPORARY_RECOVERY,
+            expected_effect="Temporary recovery only: retry startup; the limit is unchanged.",
             risk=RiskLevel.LOW,
             blast_radius="low",
             reversibility="high",
@@ -138,13 +161,16 @@ _OPTIONS_BY_CAUSE: dict[str, tuple[RemediationTemplate, ...]] = {
             action_type=FixActionType.RESTART_POD,
             change="Restart the crashing pod",
             commands=("kubectl -n <ns> delete pod <pod>",),
-            rationale="Safe but weak if the limit remains too low.",
+            rationale="Purpose=temporary_recovery. Chronic OOM returns if the limit stays low.",
         ),
     ),
     "Traffic spike": (
         _t(
             action="scale_deployment",
-            expected_effect="Absorb load and reduce per-pod memory pressure",
+            purpose=RemediationPurpose.ROOT_CAUSE,
+            expected_effect=(
+                "Potential root-cause remediation: add replicas to absorb the load."
+            ),
             risk=RiskLevel.MEDIUM,
             blast_radius="medium",
             reversibility="high",
@@ -153,11 +179,14 @@ _OPTIONS_BY_CAUSE: dict[str, tuple[RemediationTemplate, ...]] = {
             action_type=FixActionType.SCALE_DEPLOYMENT,
             change="Scale deployment replicas to handle traffic spike",
             commands=("kubectl -n <ns> scale <workload> --replicas=<n>",),
-            rationale="Reversible scale-out; blast radius limited to the service.",
+            rationale="Purpose=root_cause. Addresses capacity, not an application leak.",
         ),
         _t(
             action="increase_memory_limit",
-            expected_effect="Survive peak memory during the spike",
+            purpose=RemediationPurpose.MITIGATION,
+            expected_effect=(
+                "Mitigation: survive peak memory during the spike. Not a root-cause fix."
+            ),
             risk=RiskLevel.MEDIUM,
             blast_radius="low",
             reversibility="high",
@@ -168,13 +197,14 @@ _OPTIONS_BY_CAUSE: dict[str, tuple[RemediationTemplate, ...]] = {
             commands=(
                 "kubectl -n <ns> set resources <workload> --limits=memory=512Mi --requests=memory=256Mi",
             ),
-            rationale="Smaller blast radius than cluster-wide changes; may mask the spike.",
+            rationale="Purpose=mitigation. Masks load pressure; does not absorb the spike.",
         ),
     ),
     "Secret not created": (
         _t(
             action="create_or_fix_secret",
-            expected_effect="Restore required credentials so the pod can start",
+            purpose=RemediationPurpose.ROOT_CAUSE,
+            expected_effect="Potential root-cause remediation: create the missing secret.",
             risk=RiskLevel.LOW,
             blast_radius="low",
             reversibility="high",
@@ -186,11 +216,12 @@ _OPTIONS_BY_CAUSE: dict[str, tuple[RemediationTemplate, ...]] = {
                 "kubectl -n <ns> get secret <secret-name>",
                 "kubectl -n <ns> apply -f <secret>.yaml",
             ),
-            rationale="Config-scoped fix with low blast radius and high reversibility.",
+            rationale="Purpose=root_cause. The missing credential is the cause.",
         ),
         _t(
             action="restart_pod",
-            expected_effect="Retry mount after secret is fixed",
+            purpose=RemediationPurpose.TEMPORARY_RECOVERY,
+            expected_effect="Temporary recovery only: retry mount; useless if the secret is still missing.",
             risk=RiskLevel.LOW,
             blast_radius="low",
             reversibility="high",
@@ -199,13 +230,14 @@ _OPTIONS_BY_CAUSE: dict[str, tuple[RemediationTemplate, ...]] = {
             action_type=FixActionType.RESTART_POD,
             change="Restart pod after secret remediation",
             commands=("kubectl -n <ns> delete pod <pod>",),
-            rationale="Follow-up only; ineffective alone if the secret is still missing.",
+            rationale="Purpose=temporary_recovery. Follow-up only, not a secret fix.",
         ),
     ),
     "Wrong secret name or namespace": (
         _t(
             action="fix_secret_reference",
-            expected_effect="Point workload at the correct secret",
+            purpose=RemediationPurpose.ROOT_CAUSE,
+            expected_effect="Potential root-cause remediation: point the workload at the correct secret.",
             risk=RiskLevel.LOW,
             blast_radius="low",
             reversibility="high",
@@ -214,13 +246,14 @@ _OPTIONS_BY_CAUSE: dict[str, tuple[RemediationTemplate, ...]] = {
             action_type=FixActionType.PATCH_CONFIG,
             change="Correct secret name/namespace reference on the workload",
             commands=("kubectl -n <ns> edit <workload>",),
-            rationale="Scoped config patch; easy to revert.",
+            rationale="Purpose=root_cause. The wrong reference is the cause.",
         ),
     ),
     "Incorrect volume or envFrom mount": (
         _t(
             action="fix_volume_mount",
-            expected_effect="Mount secret/config at the path the app expects",
+            purpose=RemediationPurpose.ROOT_CAUSE,
+            expected_effect="Potential root-cause remediation: mount at the path the app expects.",
             risk=RiskLevel.LOW,
             blast_radius="low",
             reversibility="high",
@@ -229,13 +262,14 @@ _OPTIONS_BY_CAUSE: dict[str, tuple[RemediationTemplate, ...]] = {
             action_type=FixActionType.PATCH_CONFIG,
             change="Fix volumeMounts / envFrom paths",
             commands=("kubectl -n <ns> edit <workload>",),
-            rationale="Workload-local config change with high reversibility.",
+            rationale="Purpose=root_cause. The mount path/ref is the cause.",
         ),
     ),
     "Wrong image tag": (
         _t(
             action="patch_image_tag",
-            expected_effect="Pull a valid image tag and stop ImagePullBackOff",
+            purpose=RemediationPurpose.ROOT_CAUSE,
+            expected_effect="Potential root-cause remediation: set a tag that exists.",
             risk=RiskLevel.MEDIUM,
             blast_radius="low",
             reversibility="high",
@@ -244,11 +278,12 @@ _OPTIONS_BY_CAUSE: dict[str, tuple[RemediationTemplate, ...]] = {
             action_type=FixActionType.PATCH_CONFIG,
             change="Set workload image to an existing tag",
             commands=("kubectl -n <ns> set image <workload> *=<valid-image>",),
-            rationale="Single-workload change; roll back by restoring previous image.",
+            rationale="Purpose=root_cause. The bad tag is the cause.",
         ),
         _t(
             action="rollback_deployment",
-            expected_effect="Restore last known-good image",
+            purpose=RemediationPurpose.ROOT_CAUSE,
+            expected_effect="Potential root-cause remediation: restore the last known-good image.",
             risk=RiskLevel.MEDIUM,
             blast_radius="medium",
             reversibility="medium",
@@ -257,13 +292,14 @@ _OPTIONS_BY_CAUSE: dict[str, tuple[RemediationTemplate, ...]] = {
             action_type=FixActionType.ROLLBACK_DEPLOYMENT,
             change="Rollback deployment revision",
             commands=("kubectl -n <ns> rollout undo <workload>",),
-            rationale="Larger blast radius than a targeted image patch.",
+            rationale="Purpose=root_cause (potential). Broader than a targeted image patch.",
         ),
     ),
     "Image deleted or repository missing": (
         _t(
             action="patch_image_tag",
-            expected_effect="Point at an existing repository/tag",
+            purpose=RemediationPurpose.ROOT_CAUSE,
+            expected_effect="Potential root-cause remediation: point at a repository/tag that exists.",
             risk=RiskLevel.MEDIUM,
             blast_radius="low",
             reversibility="high",
@@ -272,13 +308,14 @@ _OPTIONS_BY_CAUSE: dict[str, tuple[RemediationTemplate, ...]] = {
             action_type=FixActionType.PATCH_CONFIG,
             change="Update image reference to an existing repository/tag",
             commands=("kubectl -n <ns> set image <workload> *=<valid-image>",),
-            rationale="Minimal blast radius relative to broader rollbacks.",
+            rationale="Purpose=root_cause. The missing repository/tag is the cause.",
         ),
     ),
     "Missing registry credentials": (
         _t(
             action="create_image_pull_secret",
-            expected_effect="Allow private registry pulls",
+            purpose=RemediationPurpose.ROOT_CAUSE,
+            expected_effect="Potential root-cause remediation: attach pull credentials.",
             risk=RiskLevel.LOW,
             blast_radius="low",
             reversibility="high",
@@ -289,13 +326,16 @@ _OPTIONS_BY_CAUSE: dict[str, tuple[RemediationTemplate, ...]] = {
             commands=(
                 "kubectl -n <ns> create secret docker-registry <name> --docker-server=...",
             ),
-            rationale="Namespace-scoped credential fix; easy to remove.",
+            rationale="Purpose=root_cause. Missing pull auth is the cause.",
         ),
     ),
     "Unhandled exception in application": (
         _t(
             action="rollback_deployment",
-            expected_effect="Restore last known-good application revision",
+            purpose=RemediationPurpose.ROOT_CAUSE,
+            expected_effect=(
+                "Potential root-cause remediation: restore the last known-good revision."
+            ),
             risk=RiskLevel.HIGH,
             blast_radius="medium",
             reversibility="medium",
@@ -304,11 +344,12 @@ _OPTIONS_BY_CAUSE: dict[str, tuple[RemediationTemplate, ...]] = {
             action_type=FixActionType.ROLLBACK_DEPLOYMENT,
             change="Rollback deployment to last known-good revision",
             commands=("kubectl -n <ns> rollout undo <workload>",),
-            rationale="Best available automated recovery for a bad deploy; higher risk.",
+            rationale="Purpose=root_cause (potential). Removes a bad deploy; does not patch the bug.",
         ),
         _t(
             action="restart_pod",
-            expected_effect="Retry process; unlikely to fix deterministic bugs",
+            purpose=RemediationPurpose.TEMPORARY_RECOVERY,
+            expected_effect="Temporary recovery only: retry; deterministic bugs crash again.",
             risk=RiskLevel.LOW,
             blast_radius="low",
             reversibility="high",
@@ -317,13 +358,14 @@ _OPTIONS_BY_CAUSE: dict[str, tuple[RemediationTemplate, ...]] = {
             action_type=FixActionType.RESTART_POD,
             change="Restart the crashing pod",
             commands=("kubectl -n <ns> delete pod <pod>",),
-            rationale="Low blast radius but poor expected effect for unhandled exceptions.",
+            rationale="Purpose=temporary_recovery. Not a fix for an unhandled exception.",
         ),
     ),
     "Bad configuration": (
         _t(
             action="patch_config",
-            expected_effect="Fix invalid configuration so the app can start",
+            purpose=RemediationPurpose.ROOT_CAUSE,
+            expected_effect="Potential root-cause remediation: correct the invalid config.",
             risk=RiskLevel.LOW,
             blast_radius="low",
             reversibility="high",
@@ -332,13 +374,14 @@ _OPTIONS_BY_CAUSE: dict[str, tuple[RemediationTemplate, ...]] = {
             action_type=FixActionType.PATCH_CONFIG,
             change="Fix ConfigMap/env values and restart rollout",
             commands=("kubectl -n <ns> edit configmap <name>",),
-            rationale="Config-scoped, reversible, low blast radius.",
+            rationale="Purpose=root_cause. The bad config is the cause.",
         ),
     ),
     "Missing environment variable": (
         _t(
             action="patch_env_var",
-            expected_effect="Provide required environment variable",
+            purpose=RemediationPurpose.ROOT_CAUSE,
+            expected_effect="Potential root-cause remediation: set the required variable.",
             risk=RiskLevel.LOW,
             blast_radius="low",
             reversibility="high",
@@ -347,7 +390,7 @@ _OPTIONS_BY_CAUSE: dict[str, tuple[RemediationTemplate, ...]] = {
             action_type=FixActionType.PATCH_CONFIG,
             change="Add missing environment variable to workload",
             commands=("kubectl -n <ns> set env <workload> KEY=value",),
-            rationale="Single-workload env patch with high reversibility.",
+            rationale="Purpose=root_cause. The missing env var is the cause.",
         ),
     ),
 }
@@ -367,7 +410,8 @@ _OPTIONS_BY_REMEDIATION_KEY: dict[str, tuple[RemediationTemplate, ...]] = {
 _GENERIC: tuple[RemediationTemplate, ...] = (
     _t(
         action="noop_investigate",
-        expected_effect="Avoid unsafe automated change; gather more evidence",
+        purpose=RemediationPurpose.INVESTIGATE,
+        expected_effect="Investigate only: no automated change.",
         risk=RiskLevel.LOW,
         blast_radius="low",
         reversibility="high",
@@ -376,7 +420,7 @@ _GENERIC: tuple[RemediationTemplate, ...] = (
         action_type=FixActionType.NOOP,
         change="No automated change; require human investigation",
         commands=(),
-        rationale="Safest option when no remediation template matches.",
+        rationale="Purpose=investigate. No mitigation, recovery, or root-cause action selected.",
     ),
 )
 
@@ -387,3 +431,20 @@ def templates_for(*, cause: str, remediation_key: str | None) -> tuple[Remediati
     if remediation_key and remediation_key in _OPTIONS_BY_REMEDIATION_KEY:
         return _OPTIONS_BY_REMEDIATION_KEY[remediation_key]
     return _GENERIC
+
+
+def purpose_for(*, cause: str, action: str) -> RemediationPurpose:
+    """Purpose of this action for this cause. Cause-specific; same action can differ."""
+    act = action.strip()
+    key = cause.strip()
+    templates = _OPTIONS_BY_CAUSE.get(key)
+    if templates is None:
+        canon = next((name for name in _OPTIONS_BY_CAUSE if name.lower() == key.lower()), None)
+        templates = _OPTIONS_BY_CAUSE.get(canon) if canon else None
+    if templates:
+        for template in templates:
+            if template.action == act:
+                return template.purpose
+    if act in {"restart_pod", "rollout_restart"}:
+        return RemediationPurpose.TEMPORARY_RECOVERY
+    return RemediationPurpose.INVESTIGATE

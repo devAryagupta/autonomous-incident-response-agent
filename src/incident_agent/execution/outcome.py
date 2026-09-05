@@ -9,7 +9,9 @@ from incident_agent.contracts import (
     IncidentState,
     Observations,
     OutcomeVerification,
+    ResolutionAssessment,
 )
+from incident_agent.memory.resolution import assess_resolution, confirmed_cause
 from incident_agent.providers.bundle import ProviderBundle
 from incident_agent.providers.fulfill import fulfill_evidence_requests
 
@@ -67,6 +69,29 @@ def _post_execution_probe_requests(state: IncidentState) -> list[EvidenceRequest
     ]
 
 
+def _failed_execution_verification(
+    *,
+    expected: list[str],
+    action: str,
+    cause: str,
+) -> OutcomeVerification:
+    return OutcomeVerification(
+        resolved=False,
+        expected_outcome=expected,
+        observed_outcome=[],
+        unmet_expectations=expected,
+        evidence_summaries=[],
+        reason="Execution did not succeed; cannot verify resolution",
+        assessment=assess_resolution(
+            execution_success=False,
+            service_recovered=False,
+            observed_outcomes=[],
+            action=action,
+            confirmed_hypothesis=cause,
+        ),
+    )
+
+
 def _lines_from_state(state: IncidentState, summaries: list[str]) -> list[str]:
     lines = list(summaries)
     lines.extend(state.observations.logs)
@@ -93,22 +118,20 @@ def verify_execution_outcome(
     providers: ProviderBundle,
 ) -> tuple[OutcomeVerification, Observations]:
     """
-    Re-collect evidence after execution and decide if the incident is resolved.
+    Re-collect evidence after execution and decide if the service recovered.
 
     Command success alone never marks the incident resolved.
+    Service recovery is not recorded as root-cause verification.
     """
     plan = state.execution_plan
     expected = list(plan.expected_outcome) if plan else ["pod becomes healthy"]
+    action = state.execution.action if state.execution else ""
+    cause = confirmed_cause(state)
 
     if state.execution is None or not state.execution.success:
         return (
-            OutcomeVerification(
-                resolved=False,
-                expected_outcome=expected,
-                observed_outcome=[],
-                unmet_expectations=expected,
-                evidence_summaries=[],
-                reason="Execution did not succeed; cannot verify resolution",
+            _failed_execution_verification(
+                expected=expected, action=action, cause=cause
             ),
             state.observations,
         )
@@ -152,14 +175,14 @@ def verify_execution_outcome(
         resolved = False
         unmet = ["no expected_outcome defined on ExecutionPlan"]
 
-    reason = (
-        "Incident resolved: all expected outcomes observed after execution"
-        if resolved
-        else (
-            "Execution succeeded but incident not resolved; "
-            f"unmet={unmet}"
-        )
+    assessment = assess_resolution(
+        execution_success=True,
+        service_recovered=resolved,
+        observed_outcomes=observed,
+        action=action,
+        confirmed_hypothesis=cause,
     )
+    reason = _outcome_reason(resolved, unmet, assessment)
 
     # Merge probe summaries into observations for auditability.
     next_events = list(state.observations.events)
@@ -183,6 +206,22 @@ def verify_execution_outcome(
             unmet_expectations=unmet,
             evidence_summaries=summaries,
             reason=reason,
+            assessment=assessment,
         ),
         observations,
     )
+
+
+def _outcome_reason(
+    resolved: bool,
+    unmet: list[str],
+    assessment: ResolutionAssessment,
+) -> str:
+    if assessment.root_cause_verified:
+        return "Root cause verified: causal action plus recovered service"
+    if resolved:
+        return (
+            "Service recovered after execution; root cause not verified "
+            f"(stable_recovery={assessment.stable_recovery})"
+        )
+    return f"Execution succeeded but incident not resolved; unmet={unmet}"

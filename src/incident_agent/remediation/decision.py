@@ -93,6 +93,7 @@ def _option_from_template(
         safety_score=safety,
         hypothesis_id=hyp.hypothesis_id,
         rationale=template.rationale,
+        purpose=template.purpose,
     )
 
 
@@ -118,7 +119,8 @@ def _plan_from_template(
             )
         ],
         notes=(
-            f"Chosen remediation={option.action} blast_radius={option.blast_radius} "
+            f"Chosen remediation={option.action} purpose={option.purpose.value} "
+            f"blast_radius={option.blast_radius} "
             f"reversibility={option.reversibility} rollback_possible={option.rollback_possible} "
             f"safety_score={option.safety_score:.3f}"
         ),

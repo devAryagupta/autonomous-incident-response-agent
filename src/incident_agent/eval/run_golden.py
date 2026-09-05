@@ -37,6 +37,7 @@ from incident_agent.nodes import (
 from incident_agent.nodes.enrich import enrich
 from incident_agent.providers import ProviderBundle, default_providers
 from incident_agent.routing import (
+    DIAGNOSIS_SCOPE_INVALID,
     INSUFFICIENT_CONFIDENCE,
     NOOP_DECISION,
     bump_replan,
@@ -202,7 +203,10 @@ def _predicted_root_cause(state: IncidentState) -> str | None:
 
 
 def _predicted_fix_kind(state: IncidentState) -> str | None:
-    if state.decision == NOOP_DECISION or state.decision_reason == INSUFFICIENT_CONFIDENCE:
+    if state.decision == NOOP_DECISION or state.decision_reason in {
+        INSUFFICIENT_CONFIDENCE,
+        DIAGNOSIS_SCOPE_INVALID,
+    }:
         return None
     if state.chosen_remediation_id and state.remediation_options:
         for opt in state.remediation_options:

@@ -76,6 +76,7 @@ def test_oom_chooses_increase_memory_over_rollback() -> None:
     decision = decide_remediation(_state_with_hyps(hyps, verifications=verifications))
     assert decision.chosen is not None
     assert decision.chosen.action == "increase_memory_limit"
+    assert decision.chosen.purpose.value == "mitigation"
     assert decision.chosen.blast_radius == "low"
     assert decision.chosen.reversibility == "high"
     assert decision.chosen.rollback_possible is True

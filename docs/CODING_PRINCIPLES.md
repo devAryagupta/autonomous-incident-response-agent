@@ -9,6 +9,8 @@ Related files:
 - [CONTRIBUTING.md](../CONTRIBUTING.md) — contribution paths, setup, PR checklist
 - [ARCHITECTURE.md](ARCHITECTURE.md) — layers, providers, workflow
 - [STATUS.md](STATUS.md) — shipped vs planned
+- [SCORE_SEMANTICS.md](SCORE_SEMANTICS.md) — what each `[0, 1]` number means
+- [VERIFICATION_STACKS.md](VERIFICATION_STACKS.md) — two Bayesian implementations (do not merge)
 - [.cursor/rules/](../.cursor/rules/) — Cursor agent rules that enforce the same standards
 
 ---

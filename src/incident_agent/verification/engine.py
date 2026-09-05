@@ -1,4 +1,13 @@
-"""Challenge hypotheses against observations and update posteriors (Bayesian-style)."""
+"""Live graph belief update (Bayes-factor buckets on observation text).
+
+This is the only verifier on LangGraph / pipeline / golden eval.
+It reads ``contracts.Hypothesis.likelihood`` as prior belief and writes the
+renormalized posterior onto the same field.
+
+Not the standalone OOM loop (``loop.py`` + ``HypothesisState``).
+Not a fitted P(E|H) model — factors are discrete confirmed/inconclusive/
+contradicted weights. See docs/VERIFICATION_STACKS.md.
+"""
 
 from __future__ import annotations
 

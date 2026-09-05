@@ -1,7 +1,8 @@
-"""Hypothesis state for the Bayesian verification loop.
+"""HypothesisState for the standalone OOM Bayesian loop only.
 
-Separate from `contracts.Hypothesis` (Stage-0 graph payload). Convert at the
-boundary when wiring into IncidentState.
+Not the LangGraph payload. The live graph uses ``contracts.Hypothesis``.
+Do not convert these in ``verify_hypotheses`` — that node never sees this type.
+See docs/VERIFICATION_STACKS.md.
 """
 
 from __future__ import annotations

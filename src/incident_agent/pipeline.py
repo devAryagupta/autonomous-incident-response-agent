@@ -117,6 +117,7 @@ def run_deterministic_lifecycle(
 
     state.phase = "diagnose"
     _apply(state, diagnose(state))
+    # Diagnosis is not inside the loop: replan returns to hypothesize only.
 
     while True:
         _run_plan_validate_score(state, providers=bundle)

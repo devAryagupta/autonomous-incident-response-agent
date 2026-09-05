@@ -149,6 +149,12 @@ def test_execution_lifecycle_resolves_after_outcome_verification() -> None:
     assert state.outcome_verification.resolved is True
     assert "restart count decreases" in state.outcome_verification.observed_outcome
     assert "pod becomes healthy" in state.outcome_verification.observed_outcome
+    flags = state.outcome_verification.assessment
+    assert flags.execution_success is True
+    assert flags.service_recovered is True
+    assert flags.stable_recovery is True
+    # Mitigation of a leak is not root-cause evidence.
+    assert flags.root_cause_verified is False
 
 
 def test_command_success_alone_does_not_resolve_without_outcomes() -> None:

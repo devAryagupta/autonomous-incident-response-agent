@@ -1,15 +1,17 @@
 from __future__ import annotations
 
 from incident_agent.contracts import IncidentState
+from incident_agent.diagnosis import assess_diagnosis_scope
 from incident_agent.verification import verify_hypotheses_from_state
 
 
 def verify_hypotheses(state: IncidentState) -> dict[str, object]:
     """
-    Hypothesis verification node (state-in, partial-state-out).
+    Live-graph verification node (state-in, partial-state-out).
 
-    Challenges each hypothesis against observed evidence, applies a Bayesian-style
-    update, and re-ranks hypotheses by posterior belief (``Hypothesis.likelihood``).
+    Uses ``verification.engine`` only: regex specs → Bayes-factor buckets →
+    posterior belief on ``Hypothesis.likelihood``. Does not call the
+    standalone OOM loop (``verification.loop`` / ``HypothesisState``).
     """
     verifications, updated = verify_hypotheses_from_state(state)
     log = list(state.log)
@@ -21,9 +23,19 @@ def verify_hypotheses(state: IncidentState) -> dict[str, object]:
         f"verify_hypotheses: confirmed={confirmed} contradicted={contradicted} "
         f"top={top_name} belief={top_belief:.3f}"
     )
-    return {
+    updates: dict[str, object] = {
         "hypothesis_verifications": verifications,
         "hypotheses": updated,
         "chosen_hypothesis_id": updated[0].hypothesis_id if updated else None,
         "log": log,
     }
+    if state.diagnosis is not None:
+        diagnosis = assess_diagnosis_scope(state.diagnosis, state.observations)
+        updates["diagnosis"] = diagnosis
+        if not diagnosis.scope_valid:
+            log.append(
+                f"verify_hypotheses: diagnosis_scope_invalid "
+                f"{diagnosis.scope_invalid_reason}"
+            )
+            updates["log"] = log
+    return updates

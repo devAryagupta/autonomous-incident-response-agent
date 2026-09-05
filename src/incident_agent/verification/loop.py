@@ -1,6 +1,10 @@
-"""Bayesian verification loop: plan → telemetry → evaluate → update posteriors.
+"""Standalone OOM metric walkthrough — not a LangGraph node.
 
-Pure orchestration over hexagonal ports. Does not touch LangGraph reasoning nodes.
+plan metrics → evaluate series → optional Continuous Memory Growth update.
+
+Uses ``HypothesisState`` and ``evidence.models.TelemetryResult``.
+The live graph never calls this. Traffic-spike detection is recorded only;
+it does not update posteriors. See docs/VERIFICATION_STACKS.md.
 """
 
 from __future__ import annotations

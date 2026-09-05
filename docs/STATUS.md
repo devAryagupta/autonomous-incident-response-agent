@@ -33,8 +33,8 @@ own the job. Score meanings: [SCORE_SEMANTICS.md](SCORE_SEMANTICS.md).
 | 1 | **Score terminology** | Hypothesis values = belief after evidence; remediation scores = heuristic suitability, not `P(success)` | Done (this pass) |
 | 2 | **One live confidence function** | Retire unused `score_confidence`; keep `compute_confidence` as the routing-score node | Open |
 | 3 | **Don't double-count verification in the gate score** | After verify, `Hypothesis.likelihood` is already posterior; the gate formula must not pretend it is a second independent probability | Done (this pass) |
-| 4 | **Name the two verification stacks** | Live path = `verification/engine.py` + `contracts.Hypothesis`; standalone OOM loop = `verification/loop.py` + `HypothesisState`. Document, don't merge unless a real bug requires it | Open |
-| 5 | **One job per reasoning stage** | Diagnose = category/symptoms; hypothesize = prior belief; verify = update belief; plan = choose action; `validate_fix` = plan structure; `pre_execute_validate` = execution preconditions | Open |
+| 4 | **Name the two verification stacks** | Live path = `verification/engine.py` + `contracts.Hypothesis`; standalone OOM loop = `verification/loop.py` + `HypothesisState`. Document, don't merge unless a real bug requires it | Done — [VERIFICATION_STACKS.md](VERIFICATION_STACKS.md) |
+| 5 | **One job per reasoning stage** | Diagnose = one-shot scope (frozen on replan); hypothesize = prior belief inside that scope; verify = update belief (+ invalidate scope if evidence contradicts it); plan = choose action; `validate_fix` = plan structure; `pre_execute_validate` = execution preconditions | Partial (diagnosis freeze) |
 | 6 | **Honest calibration boundary** | `ConfidenceCalibrator` is a library at the execution gate when an assessment is supplied — not a hidden extra graph stage and not the same number as hypothesis belief | Open |
 | 7 | **One public gate-score field** | Collapse `IncidentState.confidence` vs `confidence_score` to one source of truth (keep a compatibility alias if needed) | Open |
 
@@ -47,14 +47,14 @@ own the job. Score meanings: [SCORE_SEMANTICS.md](SCORE_SEMANTICS.md).
 | CrashLoopBackOff dataset + generator | Shipped | Categories for image / app / resource / dependency (+ legacy aliases) |
 | Dataset prediction eval CLI | Shipped | `python -m incident_agent.datasets.eval` |
 | Benchmark baselines (oracle / empty / heuristic) | Shipped | Plumbing validation |
-| LangGraph orchestration + replan | Shipped | High confidence → execute; low → replan; still low after max replans → NOOP |
+| LangGraph orchestration + replan | Shipped | Diagnose once (scope); replan → hypothesize only; scope contradiction or exhausted low confidence → NOOP |
 | Deterministic pipeline parity | Shipped | Prefer both in tests |
 | Diagnosis / hypothesis engines | Shipped | Deterministic Stage 0 |
 | Evidence planner + collection node | Shipped | |
-| Hypothesis verification (Bayesian / specs) | Shipped | |
+| Hypothesis verification (Bayesian / specs) | Shipped | Two stacks: live Bayes-factor update vs standalone OOM loop — see [VERIFICATION_STACKS.md](VERIFICATION_STACKS.md) |
 | Remediation catalog + plan validation | Shipped | |
 | Confidence engine + calibration | Shipped | Gates mutation when below threshold |
-| Local episode memory | Shipped | Under `runtime/` when persisted |
+| Local episode memory | Shipped | Under `runtime/` when persisted; learns only from `root_cause_verified`, not service recovery |
 | Execution lifecycle nodes | Shipped | prepare → pre-validate → approve → execute → verify outcome |
 | Dry-run execution provider | Shipped | Default-safe |
 | Kubectl allowlisted execution | Shipped (opt-in) | Fake client for tests; live via extra `k8s` |
@@ -74,6 +74,9 @@ own the job. Score meanings: [SCORE_SEMANTICS.md](SCORE_SEMANTICS.md).
 - **LLM nodes are not the Stage-0 path** — heuristics prove the loop first  
 - **Allowlist is small on purpose** — expanding actions is a safety review, not a race  
 - **Memory is local-first** — not a distributed knowledge base yet  
+- **Stable recovery is snapshot-only** — Stage 0 has no dwell-time window; a healthy-after-restart episode is never `root_cause_verified`  
+- **Diagnosis is frozen on replan** — it is coarse scope, not a live category tracker. Strong contradiction escalates instead of re-diagnosing  
+- **Two Bayesian stacks stay separate** — the graph uses Bayes-factor buckets on text; the OOM loop is an uncalibrated metric demo, not a hidden extra stage  
 - **License file** may still be pending — add before wide public launch  
 
 ---

@@ -151,10 +151,18 @@ def _print_one(incident: CrashLoopBackOffIncident) -> None:
         print()
 
     if state.outcome_verification:
+        flags = state.outcome_verification.assessment
         print("Outcome Verification:")
         print(f"resolved={state.outcome_verification.resolved}")
         print(f"observed: {state.outcome_verification.observed_outcome}")
         print(f"unmet: {state.outcome_verification.unmet_expectations}")
+        print(
+            "assessment: "
+            f"execution_success={flags.execution_success} "
+            f"service_recovered={flags.service_recovered} "
+            f"stable_recovery={flags.stable_recovery} "
+            f"root_cause_verified={flags.root_cause_verified}"
+        )
         print(state.outcome_verification.reason)
         print()
 

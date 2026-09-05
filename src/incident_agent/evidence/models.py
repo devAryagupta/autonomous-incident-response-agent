@@ -1,8 +1,9 @@
-"""Bayesian-loop evidence schemas (telemetry curiosity + results).
+"""Telemetry schemas for the standalone OOM loop only.
 
-These models are the hexagonal port for metric/log/event evidence used by the
-Bayesian verification loop. Pipeline contracts (`contracts.EvidenceRequest`)
-remain the Stage-0 graph payload; adapt at the provider boundary.
+``EvidenceRequest`` / ``TelemetryResult`` here are not
+``contracts.EvidenceRequest`` / ``EvidenceResult``. The live graph collect/
+verify path uses contracts. Adapt at a provider boundary if a future stage
+wires this loop into IncidentState. See docs/VERIFICATION_STACKS.md.
 """
 
 from __future__ import annotations

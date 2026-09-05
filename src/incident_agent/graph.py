@@ -120,9 +120,12 @@ def build_graph():
 
     START -> enrich -> diagnose -> hypothesize -> collect_evidence
           -> verify_hypotheses -> plan_fix -> validate_fix -> confidence
+      ├── diagnosis scope contradicted → escalate (NOOP) → finalize
       ├── high confidence → prepare_execution → … → execute → finalize
-      ├── low confidence & retries → replan → hypothesize ↺
+      ├── low confidence & retries → replan → hypothesize ↺ (not diagnose)
       └── still low after max replans → escalate (NOOP) → finalize
+
+    Diagnosis runs once to lock incident scope. Replan stays inside that scope.
 
     Providers are injected via:
       invoke(state, config={"configurable": {"providers": ProviderBundle(...)}})

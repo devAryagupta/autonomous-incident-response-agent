@@ -1,6 +1,11 @@
-"""Bayesian posterior update for hypothesis verification.
+"""Textbook discrete Bayes for the standalone OOM loop only.
 
-P(H_i | E) = P(E | H_i) * P(H_i) / Σ_j P(E | H_j) * P(H_j)
+P(H_i | E) ∝ P(E | H_i) * P(H_i)
+
+``P(E|H)`` values are a hand-set walkthrough matrix, not estimated
+likelihoods. The live graph does not import this module; it uses
+``verification/engine.py`` Bayes-factor buckets instead.
+See docs/VERIFICATION_STACKS.md.
 """
 
 from __future__ import annotations
