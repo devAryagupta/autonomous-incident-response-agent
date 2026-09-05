@@ -15,13 +15,23 @@ from incident_agent.contracts import (
     RiskLevel,
     ValidationVerdict,
 )
-from incident_agent.execution import build_execution_plan, check_preconditions
+from incident_agent.execution import (
+    FakeKubectlClient,
+    build_execution_plan,
+    check_preconditions,
+    parse_execution_target,
+    target_probe_ref,
+)
 from incident_agent.nodes.approve import approve
 from incident_agent.nodes.execute_fix import execute_fix
-from incident_agent.nodes.prepare_execution import prepare_execution
 from incident_agent.nodes.pre_execute_validate import pre_execute_validate
+from incident_agent.nodes.prepare_execution import prepare_execution
 from incident_agent.nodes.verify_outcome import verify_outcome
-from incident_agent.providers import DryRunExecutionProvider, default_providers
+from incident_agent.providers import (
+    DryRunExecutionProvider,
+    default_providers,
+    kubectl_execution_providers,
+)
 
 
 def _state_ready_for_execution() -> IncidentState:
@@ -155,6 +165,63 @@ def test_execution_lifecycle_resolves_after_outcome_verification() -> None:
     assert flags.stable_recovery is True
     # Mitigation of a leak is not root-cause evidence.
     assert flags.root_cause_verified is False
+
+
+def test_parse_execution_target_kinds() -> None:
+    assert parse_execution_target("deployment/payment-service") == (
+        "deployment",
+        "payment-service",
+    )
+    assert parse_execution_target("deploy/api") == ("deployment", "api")
+    assert parse_execution_target("pod/payment-service-7d9f8") == (
+        "pod",
+        "payment-service-7d9f8",
+    )
+    assert parse_execution_target("payment-service") == ("deployment", "payment-service")
+    assert parse_execution_target("<workload>") == ("deployment", "")
+
+
+def test_dry_run_pre_execute_infers_target_from_state() -> None:
+    state = _state_ready_for_execution()
+    state.execution_plan = build_execution_plan(state)
+    state.execution_plan = state.execution_plan.model_copy(
+        update={"target": "deployment/unknown-app"}
+    )
+    pre = pre_execute_validate(state, providers=default_providers())
+    assert pre["validation_verdict"].passed is True  # type: ignore[union-attr]
+
+
+def test_kubectl_pre_execute_gets_existing_deployment() -> None:
+    state = _state_ready_for_execution()
+    state.execution_plan = build_execution_plan(state)
+    client = FakeKubectlClient()
+    providers = kubectl_execution_providers(kubectl_client=client)
+    pre = pre_execute_validate(state, providers=providers)
+    assert pre["validation_verdict"].passed is True  # type: ignore[union-attr]
+    assert ("deployment", "default", "payment-service") in client.lookups
+
+
+def test_kubectl_pre_execute_fails_when_deployment_missing() -> None:
+    state = _state_ready_for_execution()
+    state.execution_plan = build_execution_plan(state)
+    client = FakeKubectlClient(deployments={})
+    providers = kubectl_execution_providers(kubectl_client=client)
+    pre = pre_execute_validate(state, providers=providers)
+    verdict = pre["validation_verdict"]
+    assert verdict.passed is False  # type: ignore[union-attr]
+    assert "deployment exists" in verdict.reason  # type: ignore[union-attr]
+    assert ("deployment", "default", "payment-service") in client.lookups
+
+    state.validation = pre["validation"]  # type: ignore[assignment]
+    state.validation_verdict = verdict  # type: ignore[assignment]
+    approval = approve(state)["approval"]
+    assert approval.approved is False  # type: ignore[union-attr]
+
+
+def test_restart_pod_probes_pod_kind() -> None:
+    plan = build_execution_plan(_state_ready_for_execution())
+    plan = plan.model_copy(update={"action": "restart_pod", "target": "pod/web-0"})
+    assert target_probe_ref(plan) == ("pod", "web-0")
 
 
 def test_command_success_alone_does_not_resolve_without_outcomes() -> None:

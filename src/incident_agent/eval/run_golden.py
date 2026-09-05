@@ -19,6 +19,7 @@ from incident_agent.contracts import (
 )
 from incident_agent.datasets.core import load_jsonl
 from incident_agent.datasets.crashloopbackoff.schema import CrashLoopBackOffIncident
+from incident_agent.eval.failures import classify_golden_failure, failure_histogram
 from incident_agent.eval.metrics import causes_match
 from incident_agent.nodes import (
     approve,
@@ -62,6 +63,7 @@ class GoldenRunRow:
     fix_correct: bool
     validation_result: str | None
     final_confidence: float | None
+    failure_category: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -157,6 +159,7 @@ class GoldenReasoningTrace:
     diagnosis_correct: bool
     fix_correct: bool
     final_confidence: float | None
+    failure_category: str | None
     replan_count: int
     route: str | None
     reasoning_passes: list[ReasoningPassSnapshot]
@@ -243,6 +246,18 @@ def row_from_run(incident: CrashLoopBackOffIncident, state: IncidentState) -> Go
 
     predicted_fix = _predicted_fix_kind(state)
     expected_fix = incident.expected_fix.kind
+    predicted_hyp = _selected_hypothesis_description(state)
+    expected_hyp = infer_expected_hypothesis(incident)
+    fix_correct = _fix_kinds_match(predicted_fix, expected_fix)
+    failure_category = classify_golden_failure(
+        diagnosis_correct=diagnosis_correct,
+        fix_correct=fix_correct,
+        expected_hypothesis=expected_hyp,
+        expected_fix_kind=expected_fix,
+        predicted_hypothesis=predicted_hyp,
+        predicted_fix_kind=predicted_fix,
+        state=state,
+    )
 
     return GoldenRunRow(
         incident_id=incident.incident_id,
@@ -251,9 +266,10 @@ def row_from_run(incident: CrashLoopBackOffIncident, state: IncidentState) -> Go
         diagnosis_correct=diagnosis_correct,
         predicted_fix_kind=predicted_fix,
         expected_fix_kind=expected_fix,
-        fix_correct=_fix_kinds_match(predicted_fix, expected_fix),
+        fix_correct=fix_correct,
         validation_result=_validation_result(state),
         final_confidence=_final_confidence(state),
+        failure_category=failure_category,
     )
 
 
@@ -454,7 +470,7 @@ def run_incident_with_reasoning_trace(
             _apply_updates(state, finalize(state, providers=bundle))
             break
         _apply_updates(state, prepare_execution(state))
-        _apply_updates(state, pre_execute_validate(state))
+        _apply_updates(state, pre_execute_validate(state, providers=bundle))
         _apply_updates(state, approve(state))
         _apply_updates(state, execute_fix(state, providers=bundle))
         _apply_updates(state, verify_outcome(state, providers=bundle))
@@ -481,6 +497,7 @@ def run_incident_with_reasoning_trace(
         diagnosis_correct=row.diagnosis_correct,
         fix_correct=row.fix_correct,
         final_confidence=row.final_confidence,
+        failure_category=row.failure_category,
         replan_count=state.replan_count,
         route=state.route,
         reasoning_passes=passes,
@@ -584,18 +601,25 @@ def main(argv: list[str] | None = None) -> int:
     print(f"Ran {n} incidents from {args.dataset}")
     print(f"diagnosis_correct: {diag_ok}/{n}")
     print(f"fix_correct:       {fix_ok}/{n}")
+    histogram = failure_histogram([r.failure_category for r in rows])
+    if histogram:
+        print("Failures by stage:")
+        for category, count in histogram.items():
+            print(f"  {category}: {count}")
     print(f"JSON: {out_json}")
     if out_csv:
         print(f"CSV:  {out_csv}")
     print(f"TRACE: {out_trace_json}")
     print()
     for row in rows:
+        fail = f"  fail={row.failure_category}" if row.failure_category else ""
         print(
             f"{row.incident_id}  "
             f"diag={row.diagnosis_correct}  "
             f"fix={row.fix_correct}  "
             f"val={row.validation_result}  "
             f"conf={row.final_confidence}"
+            f"{fail}"
         )
     return 0
 

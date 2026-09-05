@@ -112,11 +112,12 @@ flowchart TD
 | `verify_hypotheses` | Live-stack posterior belief (`verification/engine.py`). Not the OOM metric loop |
 | `plan_fix` | Rank actions by heuristic suitability + safety |
 | `validate_fix` | Structural / policy checks on the plan |
+| `pre_execute_validate` | Execution preconditions. DryRun infers target presence from state; kubectl provider GETs the resource |
 | `confidence` | Routing / gate score (execute vs replan vs escalate) — not `P(success)` |
 | `replan` | Increment counter; loop to **hypothesize**, never back to diagnose |
 | `escalate` | Invalid diagnosis scope, or still low after max replans → NOOP / investigation; no mutation |
 | `prepare_execution` … `execute` | Gate + allowlisted mutation (often dry-run) |
-| `verify_outcome` | Four-layer outcome: command / service recovery / stability / root cause |
+| `verify_outcome` | Four-layer outcome: command / service recovery / stability / root cause. Synthetic = regex evidence; Kubernetes = pod phase / ready / restarts / CrashLoopBackOff |
 | `finalize` | Terminal state + memory episode |
 
 ### Confidence routing

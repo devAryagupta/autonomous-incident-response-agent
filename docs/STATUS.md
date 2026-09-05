@@ -55,12 +55,12 @@ own the job. Score meanings: [SCORE_SEMANTICS.md](SCORE_SEMANTICS.md).
 | Remediation catalog + plan validation | Shipped | |
 | Confidence engine + calibration | Shipped | Gates mutation when below threshold |
 | Local episode memory | Shipped | Under `runtime/` when persisted; learns only from `root_cause_verified`, not service recovery |
-| Execution lifecycle nodes | Shipped | prepare → pre-validate → approve → execute → verify outcome |
+| Execution lifecycle nodes | Shipped | prepare → pre-validate → approve → execute → verify outcome. Pre-validate is a small state gate; kubectl execution GETs the target |
 | Dry-run execution provider | Shipped | Default-safe |
 | Kubectl allowlisted execution | Shipped (opt-in) | Fake client for tests; live via extra `k8s` |
 | Kubernetes observation provider | Shipped (opt-in) | Maps cluster → `Observations` |
 | Prometheus metrics provider | Shipped (opt-in) | PromQL → verification loop |
-| Multi-dimensional scorecard (`eval/`) | Shipped | Five dimensions; equal weights by default |
+| Multi-dimensional scorecard (`eval/`) | Shipped | Five dimensions; failed golden rows get a stage label, not extra metrics |
 | LLM reasoning / prompt packages | Planned | Create `llm/` + `prompts/`; do not inline into nodes |
 | More incident classes | Open | Community scenarios welcome |
 | Human approval UX / ticketing | Planned | Policy already can require human approval |
@@ -71,6 +71,7 @@ own the job. Score meanings: [SCORE_SEMANTICS.md](SCORE_SEMANTICS.md).
 ## What is intentionally stubbed or limited
 
 - **Default backends are synthetic / dry-run** so CI never needs a cluster  
+- **Pre-execute is a short checklist** — not a policy engine. DryRun infers target presence; kubectl execution GETs the resource (SDK equivalent of `kubectl get`)
 - **LLM nodes are not the Stage-0 path** — heuristics prove the loop first  
 - **Allowlist is small on purpose** — expanding actions is a safety review, not a race  
 - **Memory is local-first** — not a distributed knowledge base yet  

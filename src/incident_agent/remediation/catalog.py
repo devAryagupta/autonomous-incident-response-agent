@@ -124,7 +124,8 @@ def _plan_oomkilled(*, hypothesis_id: str, target_ref: str) -> FixPlan:
                         "kubectl -n <ns> describe pod <pod> | findstr -i OOMKilled",
                         (
                             "kubectl -n <ns> set resources <workload> "
-                            "--limits=memory=512Mi --requests=memory=256Mi"
+                            "--limits=memory=<new-memory-limit> "
+                            "--requests=memory=<new-memory-request>"
                         ),
                     ],
                 },

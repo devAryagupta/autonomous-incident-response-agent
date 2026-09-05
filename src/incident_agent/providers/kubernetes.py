@@ -460,6 +460,9 @@ class KubernetesObservationProvider:
             data["ready"] = pod.ready
             data["phase"] = pod.phase
             data["waiting_reason"] = pod.waiting_reason
+            data["terminated_reason"] = pod.terminated_reason
+            data["restart_count"] = pod.restart_count
+            data["container_ready"] = all(c.ready for c in pod.containers) if pod.containers else pod.ready
             if pod.ready and pod.phase == "Running" and not pod.waiting_reason:
                 summary = (
                     f"Pod health for {request.target}: Ready; pod becomes healthy; "

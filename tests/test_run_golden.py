@@ -14,12 +14,11 @@ from incident_agent.datasets.crashloopbackoff.schema import (
     K8sRef,
 )
 from incident_agent.eval.run_golden import (
-    GoldenRunRow,
     GoldenReasoningTrace,
-    row_from_run,
-    run_incident_with_reasoning_trace,
+    GoldenRunRow,
     run_golden_dataset,
     run_golden_dataset_with_reasoning,
+    run_incident_with_reasoning_trace,
     state_from_incident,
     write_golden_report,
     write_reasoning_trace_report,
@@ -108,6 +107,7 @@ def test_run_golden_dataset_missing_env_prefers_patch_env_var() -> None:
     assert row.predicted_fix_kind is None
     assert row.expected_fix_kind == "patch_env_var"
     assert row.fix_correct is False
+    assert row.failure_category == "INSUFFICIENT EVIDENCE"
 
 
 def test_run_golden_dataset_with_reasoning_one_incident() -> None:

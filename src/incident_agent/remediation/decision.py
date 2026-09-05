@@ -97,15 +97,30 @@ def _option_from_template(
     )
 
 
+def _explicit_memory_limit(state: IncidentState) -> str | None:
+    extra = state.observations.extra
+    for key in ("new_memory_limit", "memory_limit"):
+        raw = extra.get(key)
+        if isinstance(raw, str) and raw.strip():
+            return raw.strip()
+    return None
+
+
 def _plan_from_template(
     *,
     template: RemediationTemplate,
     option: RemediationOption,
     target_ref: str,
+    state: IncidentState,
 ) -> FixPlan:
     params: dict = {"change": template.change, "action": template.action}
     if template.commands:
         params["commands"] = list(template.commands)
+    if template.action == "increase_memory_limit":
+        limit = _explicit_memory_limit(state)
+        if limit:
+            params["new_memory_limit"] = limit
+            params["memory_limit"] = limit
     return FixPlan(
         hypothesis_id=option.hypothesis_id,
         remediation_option_id=option.option_id,
@@ -250,6 +265,7 @@ def decide_remediation(state: IncidentState) -> RemediationDecision:
         template=chosen_template,
         option=chosen,
         target_ref=target_ref,
+        state=state,
     )
     return RemediationDecision(
         options=display,

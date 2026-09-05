@@ -90,10 +90,13 @@ class FakeKubectlClient(BaseKubectlClient):
         pods: set[tuple[str, str]] | None = None,
         deployments: dict[tuple[str, str], dict[str, Any]] | None = None,
     ) -> None:
-        self.pods = set(pods or {("default", "payment-service-7d9f8")})
-        self.deployments = dict(
-            deployments
-            or {
+        self.pods = (
+            set(pods) if pods is not None else {("default", "payment-service-7d9f8")}
+        )
+        self.deployments = (
+            dict(deployments)
+            if deployments is not None
+            else {
                 ("default", "payment-service"): {
                     "replicas": 2,
                     "containers": {"app": {"memory_limit": "256Mi"}},
@@ -101,6 +104,7 @@ class FakeKubectlClient(BaseKubectlClient):
             }
         )
         self.mutations: list[MutationRecord] = []
+        self.lookups: list[tuple[str, str, str]] = []
 
     def delete_pod(self, namespace: str, name: str, *, dry_run: bool = False) -> dict[str, Any]:
         self.mutations.append(
@@ -226,6 +230,7 @@ class FakeKubectlClient(BaseKubectlClient):
 
     def resource_exists(self, kind: str, namespace: str, name: str) -> bool:
         kind_l = kind.lower()
+        self.lookups.append((kind_l, namespace, name))
         if kind_l == "pod":
             return (namespace, name) in self.pods
         if kind_l == "deployment":

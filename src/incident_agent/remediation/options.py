@@ -93,7 +93,8 @@ _OPTIONS_BY_CAUSE: dict[str, tuple[RemediationTemplate, ...]] = {
             action_type=FixActionType.PATCH_RESOURCE,
             change="Increase memory requests/limits for the workload",
             commands=(
-                "kubectl -n <ns> set resources <workload> --limits=memory=512Mi --requests=memory=256Mi",
+                "kubectl -n <ns> set resources <workload> "
+                "--limits=memory=<new-memory-limit> --requests=memory=<new-memory-request>",
             ),
             rationale="Purpose=mitigation. Memory still grows; this only buys time.",
         ),
@@ -145,7 +146,8 @@ _OPTIONS_BY_CAUSE: dict[str, tuple[RemediationTemplate, ...]] = {
             action_type=FixActionType.PATCH_RESOURCE,
             change="Increase memory requests/limits for the workload",
             commands=(
-                "kubectl -n <ns> set resources <workload> --limits=memory=512Mi --requests=memory=256Mi",
+                "kubectl -n <ns> set resources <workload> "
+                "--limits=memory=<new-memory-limit> --requests=memory=<new-memory-request>",
             ),
             rationale="Purpose=root_cause. This addresses undersized limits, not a leak.",
         ),
@@ -195,7 +197,8 @@ _OPTIONS_BY_CAUSE: dict[str, tuple[RemediationTemplate, ...]] = {
             action_type=FixActionType.PATCH_RESOURCE,
             change="Temporarily raise memory limits during the spike",
             commands=(
-                "kubectl -n <ns> set resources <workload> --limits=memory=512Mi --requests=memory=256Mi",
+                "kubectl -n <ns> set resources <workload> "
+                "--limits=memory=<new-memory-limit> --requests=memory=<new-memory-request>",
             ),
             rationale="Purpose=mitigation. Masks load pressure; does not absorb the spike.",
         ),

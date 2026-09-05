@@ -110,3 +110,8 @@ class DryRunExecutionProvider:
             started_at=stamp,
             finished_at=stamp,
         )
+
+    def resource_exists(self, kind: str, namespace: str, name: str) -> bool:
+        """No cluster: a concrete name is treated as present."""
+        _ = kind, namespace
+        return bool(name) and name != "<workload>"

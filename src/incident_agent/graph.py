@@ -89,6 +89,15 @@ def _confidence_node(
     return updates
 
 
+def _pre_execute_validate_node(
+    state: IncidentState,
+    config: RunnableConfig | None = None,
+) -> dict[str, object]:
+    updates = dict(pre_execute_validate(state, config=_config_from_runnable(config)))
+    updates["phase"] = "pre_execute_validate"
+    return updates
+
+
 def _execute_node(
     state: IncidentState,
     config: RunnableConfig | None = None,
@@ -149,10 +158,7 @@ def build_graph():
         "prepare_execution",
         _with_phase(phase="prepare_execution", fn=prepare_execution),
     )
-    g.add_node(
-        "pre_execute_validate",
-        _with_phase(phase="pre_execute_validate", fn=pre_execute_validate),
-    )
+    g.add_node("pre_execute_validate", _pre_execute_validate_node)
     g.add_node("approve", _with_phase(phase="approve", fn=approve))
     g.add_node("execute", _execute_node)
     g.add_node("verify_outcome", _verify_outcome_node)

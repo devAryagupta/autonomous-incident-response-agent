@@ -19,6 +19,7 @@ from incident_agent.execution.actions import (
 from incident_agent.execution.kubectl_client import BaseKubectlClient, FakeKubectlClient
 from incident_agent.execution.plan import decision_action
 from incident_agent.execution.policy import ExecutionDecision, ExecutionPolicy
+from incident_agent.execution.preconditions import execution_namespace
 
 # Handler lookup only. Never rewrite identity to a different kubectl verb.
 # increase_memory_limit / patch_resource are the same operation as update_resource_limit.
@@ -26,6 +27,30 @@ _HANDLER_FOR_IDENTITY: dict[str, str] = {
     "increase_memory_limit": "update_resource_limit",
     "patch_resource": "update_resource_limit",
 }
+
+_MEMORY_LIMIT_ALIASES = ("memory_limit", "new_memory_limit", "limit")
+
+
+def _copy_explicit_memory_limit(parameters: dict[str, Any]) -> None:
+    """Require an explicit quantity. Never invent 512Mi (that can shrink a 1Gi limit)."""
+    if isinstance(parameters.get("memory_limit"), str) and parameters["memory_limit"]:
+        return
+    for alias in _MEMORY_LIMIT_ALIASES:
+        raw = parameters.get(alias)
+        if isinstance(raw, str) and raw.strip():
+            parameters["memory_limit"] = raw.strip()
+            return
+
+
+def _validation_failure_reason(action_type: str, parameters: dict[str, Any]) -> str:
+    if action_type in {"update_resource_limit", "increase_memory_limit", "patch_resource"}:
+        memory = parameters.get("memory_limit")
+        if not isinstance(memory, str) or not memory.strip():
+            return (
+                "update_resource_limit invalid: "
+                "explicit memory_limit / new_memory_limit is required"
+            )
+    return f"action validation failed for {action_type}"
 
 
 class KubectlExecutionProvider:
@@ -63,10 +88,12 @@ class KubectlExecutionProvider:
         except UnknownActionError as exc:
             raise UnknownActionError(str(exc)) from exc
 
+        parameters = dict(request.parameters)
+        _copy_explicit_memory_limit(parameters)
         context = ActionContext(
             target=request.target,
             namespace=request.namespace,
-            parameters=dict(request.parameters),
+            parameters=parameters,
         )
 
         # Parameter / resource validation before policy (fail closed early).
@@ -77,7 +104,7 @@ class KubectlExecutionProvider:
                 action_type=request.type,
                 target=request.target,
                 namespace=request.namespace,
-                reason=f"action validation failed for {request.type}",
+                reason=_validation_failure_reason(request.type, context.parameters),
                 dry_run=request.dry_run,
                 requires_human_approval=True,
             )
@@ -143,6 +170,12 @@ class KubectlExecutionProvider:
             action=request.type,
         )
 
+    def resource_exists(self, kind: str, namespace: str, name: str) -> bool:
+        """GET via the kubectl client (live cluster or FakeKubectlClient)."""
+        if not name or not namespace:
+            return False
+        return self._client.resource_exists(kind, namespace, name)
+
     def _request_from_plan(self, plan: FixPlan, state: IncidentState) -> ActionRequest:
         action_name = decision_action(state, plan=plan)
         handler_type = _HANDLER_FOR_IDENTITY.get(action_name, action_name)
@@ -151,20 +184,14 @@ class KubectlExecutionProvider:
             if state.execution_plan
             else (plan.actions[0].target if plan.actions else "<workload>")
         )
-        namespace = "default"
-        if state.resource and state.resource.namespace:
-            namespace = state.resource.namespace
-        elif isinstance(state.observations.extra.get("namespace"), str):
-            namespace = str(state.observations.extra["namespace"])
+        namespace = execution_namespace(state)
 
         parameters: dict[str, Any] = {}
         if plan.actions:
             parameters.update(plan.actions[0].params or {})
         if handler_type == "update_resource_limit":
             parameters.setdefault("container_name", parameters.get("container", "app"))
-            if "memory_limit" not in parameters and "limit" in parameters:
-                parameters["memory_limit"] = parameters["limit"]
-            parameters.setdefault("memory_limit", "512Mi")
+            _copy_explicit_memory_limit(parameters)
         if handler_type == "scale_deployment":
             if "desired_replicas" not in parameters:
                 parameters["desired_replicas"] = int(parameters.get("replicas", 2))

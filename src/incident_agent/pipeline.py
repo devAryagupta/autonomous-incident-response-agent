@@ -61,7 +61,7 @@ def _run_execution_lifecycle(state: IncidentState, *, providers: ProviderBundle)
     _apply(state, prepare_execution(state))
 
     state.phase = "pre_execute_validate"
-    _apply(state, pre_execute_validate(state))
+    _apply(state, pre_execute_validate(state, providers=providers))
 
     state.phase = "approve"
     _apply(state, approve(state))

@@ -251,3 +251,23 @@ def test_option_confidence_ignores_verification_verdict() -> None:
     assert with_verdict.chosen.confidence == without_verdict.chosen.confidence
     # increase_memory_limit catalog suitability 0.85 × belief 0.70
     assert with_verdict.chosen.suitability == 0.595
+
+
+def test_increase_memory_limit_plan_keeps_explicit_target_quantity() -> None:
+    hyps = [
+        Hypothesis(
+            hypothesis_id="h1-memory_limit_too_low",
+            description="Memory limit too low",
+            likelihood=0.90,
+            remediation_key="Resource Constraint (OOMKilled)",
+        )
+    ]
+    state = _state_with_hyps(hyps)
+    state.observations.extra["new_memory_limit"] = "2Gi"
+    decision = decide_remediation(state)
+    assert decision.chosen is not None
+    assert decision.chosen.action == "increase_memory_limit"
+    params = decision.fix_plan.actions[0].params
+    assert params.get("new_memory_limit") == "2Gi"
+    assert params.get("memory_limit") == "2Gi"
+    assert "512Mi" not in str(params)
