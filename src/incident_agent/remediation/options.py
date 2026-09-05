@@ -9,17 +9,30 @@ from incident_agent.contracts import FixActionType, RiskLevel
 
 @dataclass(frozen=True, slots=True)
 class RemediationTemplate:
+    """Catalog row for one cause → action pairing.
+
+    ``base_confidence`` (alias ``base_effectiveness``) is the catalog weight
+    for how well this action fits the cause — not P(success).
+    Suitability = base_effectiveness × current hypothesis belief (posterior).
+    """
+
     action: str
     expected_effect: str
     risk: RiskLevel
     blast_radius: str
     reversibility: str
     rollback_possible: bool
+    # Catalog baseline effectiveness in [0, 1]. Not P(success).
     base_confidence: float
     action_type: FixActionType
     change: str
     commands: tuple[str, ...]
     rationale: str
+
+    @property
+    def base_effectiveness(self) -> float:
+        """Catalog baseline effectiveness (same stored value as ``base_confidence``)."""
+        return self.base_confidence
 
 
 def _t(
@@ -52,8 +65,10 @@ def _t(
 
 
 # Keyed by hypothesis.description (SRE cause) with remediation_key fallbacks.
+# this is the list of the possible remediation options for a given cause.
 _OPTIONS_BY_CAUSE: dict[str, tuple[RemediationTemplate, ...]] = {
     "Memory leak": (
+        #_t is a helper function to create a RemediationTemplate object.
         _t(
             action="increase_memory_limit",
             expected_effect="Prevent OOM while investigating the leak",

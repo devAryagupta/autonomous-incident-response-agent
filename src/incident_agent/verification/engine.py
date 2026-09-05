@@ -13,7 +13,8 @@ from incident_agent.contracts import (
 )
 from incident_agent.verification.specs import VerificationSpec, spec_for
 
-_MEMORY_GROWTH_RE = re.compile(
+# THIS REGEX WILL BE USED TO MATCH THE MEMORY GROWTH OBSERVATIONS
+_MEMORY_GROWTH_REGEX = re.compile(
     r"(?:memory|rss|heap)?\s*(?:increased|grew|from)?\s*(\d+)\s*mi\b.*?\b(\d+)\s*mi\b",
     re.IGNORECASE,
 )
@@ -111,7 +112,7 @@ def _dedupe(values: list[str]) -> list[str]:
 def _memory_growth_observations(lines: list[str], observations: Observations) -> list[str]:
     found: list[str] = []
     for line in lines:
-        match = _MEMORY_GROWTH_RE.search(line)
+        match = _MEMORY_GROWTH_REGEX.search(line)
         if match:
             low, high = int(match.group(1)), int(match.group(2))
             if high > low:
@@ -147,10 +148,11 @@ def _challenge(
     lines: list[str],
     observations: Observations,
 ) -> _Challenge:
+    # collect the hits for the support and contradict patterns and required patterns
     support = _collect_hits(lines, spec.support_patterns)
     contradict = _collect_hits(lines, spec.contradict_patterns)
     required, required_matches = _collect_required_hits(lines, spec.required_patterns)
-
+    # if the hypothesis is a memory leak, collect the memory growth observations and add them to the support and required patterns
     if hyp.description == "Memory leak":
         growth = _memory_growth_observations(lines, observations)
         support.extend(growth)
@@ -262,7 +264,9 @@ def verify_hypotheses_from_state(
     """
     Prior belief + observed evidence → posterior belief.
 
-    Returns verifications and re-ranked hypotheses with updated likelihoods.
+    Reads ``Hypothesis.likelihood`` as the prior, writes the renormalized
+    posterior back onto the same field (current belief after evidence).
+    Does not estimate remediation success probability.
     """
     if not state.hypotheses:
         raise ValueError("state.hypotheses is required before verify_hypotheses()")
@@ -272,12 +276,12 @@ def verify_hypotheses_from_state(
     raw_posteriors: list[float] = []
 
     for hyp in state.hypotheses:
-        spec = spec_for(hyp.description)
+        spec = spec_for(hyp.description) # get the supporting and contradicting evidence and the patterns to verify the evidence
         challenge = _challenge(hyp, spec, lines, state.observations)
-        prior = float(hyp.likelihood)
-        posterior = _from_odds(_to_odds(prior) * challenge.bayes_factor)
-        delta = round(posterior - prior, 4)
-        raw_posteriors.append(posterior)
+        prior_belief = float(hyp.likelihood)
+        posterior_belief = _from_odds(_to_odds(prior_belief) * challenge.bayes_factor)
+        delta = round(posterior_belief - prior_belief, 4)
+        raw_posteriors.append(posterior_belief)
         expected_evidence = list(
             challenge.required_expected
             if challenge.required_expected
@@ -307,9 +311,9 @@ def verify_hypotheses_from_state(
 
     normalized = _normalize(raw_posteriors)
     updated: list[Hypothesis] = []
-    for hyp, posterior in zip(state.hypotheses, normalized, strict=True):
+    for hyp, posterior_belief in zip(state.hypotheses, normalized, strict=True):
         updated.append(
-            hyp.model_copy(update={"likelihood": round(float(posterior), 4)})
+            hyp.model_copy(update={"likelihood": round(float(posterior_belief), 4)})
         )
 
     ranked = sorted(updated, key=lambda h: h.likelihood, reverse=True)

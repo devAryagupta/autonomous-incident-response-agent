@@ -23,7 +23,12 @@ class HypothesisStatus(StrEnum):
 
 
 class HypothesisState(HypothesisModelBase):
-    """Prior → posterior belief for one root-cause hypothesis."""
+    """Prior → posterior belief for one root-cause hypothesis.
+
+    Used by the standalone OOM Bayesian loop (``verification/loop.py``), not
+    as the LangGraph ``IncidentState`` payload. The live graph stores the same
+    idea on ``contracts.Hypothesis.likelihood`` (prior, then posterior).
+    """
 
     id: str
     description: str

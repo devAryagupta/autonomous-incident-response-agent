@@ -11,6 +11,7 @@ from incident_agent.execution.actions.base import (
     RiskLevel,
 )
 from incident_agent.execution.actions.restart_pod import RestartPodAction
+from incident_agent.execution.actions.rollback_deployment import RollbackDeploymentAction
 from incident_agent.execution.actions.rollout_restart import RolloutRestartAction
 from incident_agent.execution.actions.scale_deployment import ScaleDeploymentAction
 from incident_agent.execution.actions.update_resource_limit import UpdateResourceLimitAction
@@ -19,9 +20,13 @@ from incident_agent.execution.kubectl_client import BaseKubectlClient
 ALLOWLISTED_ACTION_TYPES: frozenset[str] = frozenset(
     {
         RestartPodAction.action_type,
+        RollbackDeploymentAction.action_type,
         RolloutRestartAction.action_type,
         ScaleDeploymentAction.action_type,
         UpdateResourceLimitAction.action_type,
+        # Same-operation identities handled by UpdateResourceLimitAction.
+        "increase_memory_limit",
+        "patch_resource",
     }
 )
 
@@ -43,12 +48,16 @@ class ActionRegistry:
 
     @classmethod
     def default(cls, client: BaseKubectlClient) -> ActionRegistry:
+        limits = UpdateResourceLimitAction(client)
         return cls(
             {
                 RestartPodAction.action_type: RestartPodAction(client),
+                RollbackDeploymentAction.action_type: RollbackDeploymentAction(client),
                 RolloutRestartAction.action_type: RolloutRestartAction(client),
                 ScaleDeploymentAction.action_type: ScaleDeploymentAction(client),
-                UpdateResourceLimitAction.action_type: UpdateResourceLimitAction(client),
+                UpdateResourceLimitAction.action_type: limits,
+                "increase_memory_limit": limits,
+                "patch_resource": limits,
             }
         )
 
@@ -81,6 +90,7 @@ __all__ = [
     "ActionStatus",
     "RestartPodAction",
     "RiskLevel",
+    "RollbackDeploymentAction",
     "RolloutRestartAction",
     "ScaleDeploymentAction",
     "UnknownActionError",

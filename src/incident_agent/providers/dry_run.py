@@ -5,17 +5,11 @@ from __future__ import annotations
 from datetime import UTC
 
 from incident_agent.contracts import ExecutionResult, FixPlan, IncidentState
+from incident_agent.execution.plan import decision_action
 
 
 def _action_name(plan: FixPlan, state: IncidentState) -> str:
-    if state.execution_plan and state.execution_plan.action:
-        return state.execution_plan.action
-    if plan.actions:
-        params = plan.actions[0].params or {}
-        if isinstance(params.get("action"), str) and params["action"]:
-            return str(params["action"])
-        return plan.actions[0].action_type.value
-    return "noop"
+    return decision_action(state, plan=plan)
 
 
 def _applied_changes(plan: FixPlan, *, action: str, target: str) -> list[str]:
@@ -31,6 +25,10 @@ def _applied_changes(plan: FixPlan, *, action: str, target: str) -> list[str]:
         changes.append(f"memory limit updated for {target} (simulated dry-run)")
     elif action == "rollback_deployment":
         changes.append(f"deployment rolled back for {target} (simulated dry-run)")
+    elif action == "rollout_restart":
+        changes.append(f"deployment rollout restarted for {target} (simulated dry-run)")
+    elif action == "restart_pod":
+        changes.append(f"pod deleted/recreated for {target} (simulated dry-run)")
     elif action == "create_or_fix_secret":
         changes.append(f"secret created/fixed for {target} (simulated dry-run)")
     elif action == "patch_image_tag":

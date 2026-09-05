@@ -7,6 +7,7 @@ Welcome. Start with the root [README.md](../README.md) — it is written so a ne
 | [../README.md](../README.md) | Everyone | 2-minute overview, diagrams, status, quickstart |
 | [../CONTRIBUTING.md](../CONTRIBUTING.md) | Contributors | Five contribution paths, setup, PR checklist |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Contributors | Layers, providers, workflow depth |
+| [SCORE_SEMANTICS.md](SCORE_SEMANTICS.md) | Contributors | Belief vs suitability vs gate score |
 | [STATUS.md](STATUS.md) | Everyone | Shipped vs planned (transparent) |
 | [CODING_PRINCIPLES.md](CODING_PRINCIPLES.md) | Contributors | Naming, SoC, size limits, anti-patterns |
 | [../runtime/README.md](../runtime/README.md) | Contributors | Runtime data layout (outside `src/`) |

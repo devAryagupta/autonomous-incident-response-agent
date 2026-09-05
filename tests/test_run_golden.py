@@ -98,12 +98,16 @@ def test_run_golden_dataset_one_incident() -> None:
 
 
 def test_run_golden_dataset_missing_env_prefers_patch_env_var() -> None:
-    rows = run_golden_dataset([_missing_env_incident()])
+    rows, traces = run_golden_dataset_with_reasoning([_missing_env_incident()])
     assert len(rows) == 1
     row = rows[0]
-    assert row.predicted_fix_kind == "patch_env_var"
+    last_pass = traces[0].reasoning_passes[-1]
+    # Planner still prefers the config fix; gate 0.673 < 0.7 so it is not committed.
+    assert last_pass.selected_remediation == "patch_env_var"
+    assert last_pass.route_decision == "escalate"
+    assert row.predicted_fix_kind is None
     assert row.expected_fix_kind == "patch_env_var"
-    assert row.fix_correct is True
+    assert row.fix_correct is False
 
 
 def test_run_golden_dataset_with_reasoning_one_incident() -> None:

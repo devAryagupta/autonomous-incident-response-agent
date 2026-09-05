@@ -8,8 +8,12 @@ This document explains **how the agent is structured** and **how one incident fl
 
 1. **Deterministic core** — Stage-0 reasoning paths run without LLMs, API keys, or a cluster  
 2. **Provider isolation** — Observation / Metrics / Execution / Memory swap without rewriting business nodes  
-3. **Safety before autonomy** — calibrated confidence × risk policy gates every mutation  
+3. **Safety before autonomy** — a routing / gate score × risk policy gates every mutation  
 4. **Eval-native** — synthetic incidents + decision traces + multi-dimensional scorecards  
+
+Numbers in `[0, 1]` are not one probability. Hypothesis values are **belief** after
+evidence updates; remediation scores are **heuristic suitability**, not `P(success)`.
+See [SCORE_SEMANTICS.md](SCORE_SEMANTICS.md).  
 
 ---
 
@@ -81,9 +85,11 @@ flowchart TD
   plan_fix --> validate_fix
   validate_fix --> confidence
 
-  confidence -->|end| prepare_execution
+  confidence -->|execute| prepare_execution
   confidence -->|replan| replan
+  confidence -->|escalate| escalate
   replan --> hypothesize
+  escalate --> finalize
 
   prepare_execution --> pre_execute_validate
   pre_execute_validate --> approve
@@ -99,24 +105,30 @@ flowchart TD
 |-------|--------|
 | `enrich` | Attach provider-backed context to state |
 | `diagnose` | Symptom / category framing from observations |
-| `hypothesize` | Ranked root-cause candidates |
+| `hypothesize` | Competing causes with normalized **prior belief** |
 | `collect_evidence` | Planned telemetry pulls |
-| `verify_hypotheses` | Bayesian / spec-driven confirmation |
-| `plan_fix` | Remediation plan from confirmed hypothesis |
+| `verify_hypotheses` | Update belief (posterior) from observed evidence |
+| `plan_fix` | Rank actions by heuristic suitability + safety |
 | `validate_fix` | Structural / policy checks on the plan |
-| `confidence` | Score (+ calibration signals) |
+| `confidence` | Routing / gate score (execute vs replan vs escalate) — not `P(success)` |
 | `replan` | Increment counter; loop to hypothesize |
+| `escalate` | Still low after max replans → NOOP / investigation; no mutation |
 | `prepare_execution` … `execute` | Gate + allowlisted mutation (often dry-run) |
 | `verify_outcome` | Did the world improve? |
 | `finalize` | Terminal state + memory episode |
 
 ### Confidence routing
 
+The `confidence` node writes a **routing / gate score** (`ConfidenceScore` /
+`IncidentState.confidence_score`). It is `top_belief × validation_pass` — not a
+calibrated probability that the incident will resolve.
+
 From `routing.py` (defaults):
 
 - Score ≥ threshold (default **0.7**) → enter execution lifecycle  
 - Score low and `replan_count < max_replans` → replan  
-- Retries exhausted → still enter execution lifecycle; prepare/approve may **skip** unsafe actions  
+- Still low after max replans → **NOOP** (`decision=NOOP`,
+  `reason=INSUFFICIENT_CONFIDENCE`); execution is skipped
 
 ### Execution safety
 
@@ -129,7 +141,10 @@ From `routing.py` (defaults):
 | HIGH | 0.95 |
 | CRITICAL | 0.99 |
 
-Allowlisted kubectl actions today: `restart_pod`, `rollout_restart`, `scale_deployment`, `update_resource_limit`. No free-form shell.
+Allowlisted kubectl actions today: `restart_pod`, `rollback_deployment`,
+`rollout_restart`, `scale_deployment`, `update_resource_limit`. These are
+distinct operations — `rollback_deployment` is `rollout undo`, not a restart.
+No free-form shell.
 
 ---
 

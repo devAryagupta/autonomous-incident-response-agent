@@ -22,6 +22,24 @@ We **are** claiming:
 
 ---
 
+## Architecture cleanup (7 tasks)
+
+The graph shape stays. Each task fixes one interviewer-facing inconsistency.
+No new packages or stages unless a later task proves the current stage cannot
+own the job. Score meanings: [SCORE_SEMANTICS.md](SCORE_SEMANTICS.md).
+
+| # | Task | One job | Status |
+|---|------|---------|--------|
+| 1 | **Score terminology** | Hypothesis values = belief after evidence; remediation scores = heuristic suitability, not `P(success)` | Done (this pass) |
+| 2 | **One live confidence function** | Retire unused `score_confidence`; keep `compute_confidence` as the routing-score node | Open |
+| 3 | **Don't double-count verification in the gate score** | After verify, `Hypothesis.likelihood` is already posterior; the gate formula must not pretend it is a second independent probability | Done (this pass) |
+| 4 | **Name the two verification stacks** | Live path = `verification/engine.py` + `contracts.Hypothesis`; standalone OOM loop = `verification/loop.py` + `HypothesisState`. Document, don't merge unless a real bug requires it | Open |
+| 5 | **One job per reasoning stage** | Diagnose = category/symptoms; hypothesize = prior belief; verify = update belief; plan = choose action; `validate_fix` = plan structure; `pre_execute_validate` = execution preconditions | Open |
+| 6 | **Honest calibration boundary** | `ConfidenceCalibrator` is a library at the execution gate when an assessment is supplied — not a hidden extra graph stage and not the same number as hypothesis belief | Open |
+| 7 | **One public gate-score field** | Collapse `IncidentState.confidence` vs `confidence_score` to one source of truth (keep a compatibility alias if needed) | Open |
+
+---
+
 ## Capability matrix
 
 | Capability | State | Notes |
@@ -29,7 +47,7 @@ We **are** claiming:
 | CrashLoopBackOff dataset + generator | Shipped | Categories for image / app / resource / dependency (+ legacy aliases) |
 | Dataset prediction eval CLI | Shipped | `python -m incident_agent.datasets.eval` |
 | Benchmark baselines (oracle / empty / heuristic) | Shipped | Plumbing validation |
-| LangGraph orchestration + replan | Shipped | Conditional edges on confidence |
+| LangGraph orchestration + replan | Shipped | High confidence → execute; low → replan; still low after max replans → NOOP |
 | Deterministic pipeline parity | Shipped | Prefer both in tests |
 | Diagnosis / hypothesis engines | Shipped | Deterministic Stage 0 |
 | Evidence planner + collection node | Shipped | |

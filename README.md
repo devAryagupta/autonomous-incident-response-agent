@@ -30,6 +30,8 @@ Alert / observations
    ┌────┴────┐
    │ replan  │  (low confidence, retries left)
    └────┬────┘
+        │
+   still low after max replans → NOOP / escalate (no mutation)
         ▼
  Prepare → Pre-validate → Approve → Execute → Verify outcome → Done
                               ▲
@@ -62,7 +64,7 @@ If you care about **trustworthy automation for SRE**, this is the foundation we 
 | Confidence calibration (mutation gate) | **Done** | Blends posterior × evidence × memory |
 | Local episode memory | **Done** | Priors / retrieval; runtime under `runtime/` |
 | Execution lifecycle (prepare → approve → execute → verify) | **Done** | Dry-run default |
-| Kubectl allowlisted actions | **Done (opt-in)** | `restart_pod`, `rollout_restart`, `scale_deployment`, `update_resource_limit` |
+| Kubectl allowlisted actions | **Done (opt-in)** | `restart_pod`, `rollback_deployment`, `rollout_restart`, `scale_deployment`, `update_resource_limit` |
 | Live K8s observations | **Done (opt-in)** | `KubernetesObservationProvider` |
 | Live Prometheus metrics | **Done (opt-in)** | `PrometheusMetricsProvider` |
 | Multi-dimensional eval scorecard | **Done** | Diagnosis · efficiency · calibration · remediation safety · MTTR |
@@ -77,6 +79,8 @@ Details: [docs/STATUS.md](docs/STATUS.md).
 ## Architecture
 
 Layers depend **inward**. Outer layers may call inner layers; domain rules never reach out for HTTP, kubectl, or LLMs directly.
+
+Hypothesis values are **belief** after evidence updates; remediation scores are **heuristic suitability**, not `P(success)`. Details: [docs/SCORE_SEMANTICS.md](docs/SCORE_SEMANTICS.md).
 
 ```mermaid
 flowchart TB
@@ -152,7 +156,9 @@ flowchart TD
 
   confidence -->|score ≥ threshold| prepare_execution
   confidence -->|score low + retries left| replan
+  confidence -->|still low after max replans| escalate
   replan --> hypothesize
+  escalate --> finalize
 
   prepare_execution --> pre_execute_validate
   pre_execute_validate --> approve

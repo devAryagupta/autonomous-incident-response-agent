@@ -9,7 +9,6 @@ from incident_agent.contracts import (
     FixActionType,
     FixPlan,
     Hypothesis,
-    HypothesisVerification,
     IncidentState,
     RemediationOption,
     RiskLevel,
@@ -18,16 +17,16 @@ from incident_agent.remediation.options import RemediationTemplate, templates_fo
 
 _LEVEL = {"low": 0.0, "medium": 0.5, "high": 1.0}
 
-# Prefer minimum blast radius, then undoability, then confidence of success.
+# Prefer minimum blast radius, then undoability, then heuristic suitability.
 _W_BLAST = 0.30
 _W_REVERSIBILITY = 0.25
 _W_ROLLBACK = 0.15
 _W_RISK = 0.15
-_W_CONFIDENCE = 0.15
+_W_SUITABILITY = 0.15
 
-# Minimum confidence needed for an option to be considered effective.
-_MIN_VIABLE_CONFIDENCE = 0.40
-# Effective-set floor: keep actions within this margin of the top confidence,
+# Minimum suitability needed for an option to be considered effective.
+_MIN_VIABLE_SUITABILITY = 0.40
+# Effective-set floor: keep actions within this margin of the top suitability,
 # then choose the safest among them.
 _EFFECTIVENESS_MARGIN = 0.10
 _BLOCKED_INEFFECTIVE_RULE = "remediation_decision.v1:blocked_ineffective"
@@ -41,20 +40,6 @@ class RemediationDecision:
     matched_rule: str | None
 
 
-def _verification_factor(
-    hyp: Hypothesis,
-    verifications: list[HypothesisVerification],
-) -> float:
-    match = next((v for v in verifications if v.hypothesis_id == hyp.hypothesis_id), None)
-    if match is None:
-        return 0.85
-    if match.result == "confirmed":
-        return 1.0
-    if match.result == "contradicted":
-        return 0.40
-    return 0.75
-
-
 def _clamp(value: float) -> float:
     return max(0.0, min(1.0, value))
 
@@ -65,7 +50,7 @@ def _safety_score(
     reversibility: str,
     rollback_possible: bool,
     risk: RiskLevel,
-    confidence: float,
+    suitability: float,
 ) -> float:
     blast = _LEVEL.get(blast_radius, 0.5)
     rev = _LEVEL.get(reversibility, 0.5)
@@ -75,7 +60,7 @@ def _safety_score(
         + rev * _W_REVERSIBILITY
         + (1.0 if rollback_possible else 0.0) * _W_ROLLBACK
         + (1.0 - risk_v) * _W_RISK
-        + confidence * _W_CONFIDENCE
+        + suitability * _W_SUITABILITY
     )
     return round(_clamp(score), 4)
 
@@ -85,16 +70,16 @@ def _option_from_template(
     template: RemediationTemplate,
     hyp: Hypothesis,
     rank: int,
-    verifications: list[HypothesisVerification],
 ) -> RemediationOption:
-    v_factor = _verification_factor(hyp, verifications)
-    confidence = round(_clamp(template.base_confidence * float(hyp.likelihood) * v_factor), 4)
+    # baseline effectiveness × current hypothesis belief (posterior).
+    # Verification already moved the posterior; do not apply the verdict again.
+    suitability = round(_clamp(template.base_effectiveness * float(hyp.belief)), 4)
     safety = _safety_score(
         blast_radius=template.blast_radius,
         reversibility=template.reversibility,
         rollback_possible=template.rollback_possible,
         risk=template.risk,
-        confidence=confidence,
+        suitability=suitability,
     )
     return RemediationOption(
         option_id=f"r{rank}-{template.action}",
@@ -104,7 +89,7 @@ def _option_from_template(
         blast_radius=template.blast_radius,  # type: ignore[arg-type]
         reversibility=template.reversibility,  # type: ignore[arg-type]
         rollback_possible=template.rollback_possible,
-        confidence=confidence,
+        confidence=suitability,
         safety_score=safety,
         hypothesis_id=hyp.hypothesis_id,
         rationale=template.rationale,
@@ -166,17 +151,16 @@ def _noop_plan(
 def decide_remediation(state: IncidentState) -> RemediationDecision:
     """
     Generate remediation candidates from verified hypotheses, score them for
-    expected effectiveness + safety, and emit a FixPlan for the winner.
+    heuristic suitability + safety, and emit a FixPlan for the winner.
 
-    Decision only — does not execute.
+    Suitability is not a probability of success. Decision only — does not execute.
     """
     if not state.hypotheses:
         raise ValueError("state.hypotheses is required before decide_remediation()")
 
     target_ref = str(state.observations.extra.get("target_ref", "<workload>"))
-    verifications = list(state.hypothesis_verifications)
 
-    # Focus on top hypotheses (already posterior-ranked).
+    # Focus on the highest-belief hypotheses (already posterior-ranked after verify).
     focus = list(state.hypotheses[: max(1, min(3, len(state.hypotheses)))])
 
     scored: list[tuple[RemediationOption, RemediationTemplate]] = []
@@ -194,7 +178,6 @@ def decide_remediation(state: IncidentState) -> RemediationDecision:
                 template=template,
                 hyp=hyp,
                 rank=seq,
-                verifications=verifications,
             )
             scored.append((option, template))
 
@@ -211,16 +194,16 @@ def decide_remediation(state: IncidentState) -> RemediationDecision:
     def _global_rank_key(pair: tuple[RemediationOption, RemediationTemplate]) -> tuple:
         opt = pair[0]
         return (
-            opt.confidence,
+            opt.suitability,
             opt.safety_score,
             -_LEVEL.get(opt.blast_radius, 0.5),
             -_LEVEL.get(opt.risk.value, 0.5),
         )
 
     ranked_all = sorted(scored, key=_global_rank_key, reverse=True)
-    top_confidence = ranked_all[0][0].confidence
-    effective_floor = max(_MIN_VIABLE_CONFIDENCE, top_confidence - _EFFECTIVENESS_MARGIN)
-    effective = [pair for pair in ranked_all if pair[0].confidence >= effective_floor]
+    top_suitability = ranked_all[0][0].suitability
+    effective_floor = max(_MIN_VIABLE_SUITABILITY, top_suitability - _EFFECTIVENESS_MARGIN)
+    effective = [pair for pair in ranked_all if pair[0].suitability >= effective_floor]
     if not effective:
         display = [opt for opt, _ in ranked_all]
         blocked_plan = _noop_plan(
@@ -232,7 +215,7 @@ def decide_remediation(state: IncidentState) -> RemediationDecision:
             ),
             notes=(
                 f"No remediation option met effectiveness floor "
-                f"({effective_floor:.3f}); highest={top_confidence:.3f}."
+                f"({effective_floor:.3f}); highest={top_suitability:.3f}."
             ),
         )
         return RemediationDecision(
@@ -248,13 +231,13 @@ def decide_remediation(state: IncidentState) -> RemediationDecision:
             opt.safety_score,
             -_LEVEL.get(opt.blast_radius, 0.5),
             -_LEVEL.get(opt.risk.value, 0.5),
-            opt.confidence,
+            opt.suitability,
         )
 
     ranked_effective = sorted(effective, key=_effective_rank_key, reverse=True)
 
     # Re-order displayed options: chosen family first (safest among effective),
-    # then remaining by global confidence+safety.
+    # then remaining by global suitability+safety.
     chosen_ids = {opt.option_id for opt, _ in ranked_effective}
     display = [opt for opt, _ in ranked_effective] + [
         opt for opt, _ in ranked_all if opt.option_id not in chosen_ids

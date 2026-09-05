@@ -17,17 +17,14 @@ from incident_agent.execution.actions import (
     UnknownActionError,
 )
 from incident_agent.execution.kubectl_client import BaseKubectlClient, FakeKubectlClient
+from incident_agent.execution.plan import decision_action
 from incident_agent.execution.policy import ExecutionDecision, ExecutionPolicy
 
-# Map Stage-0 FixActionType / remediation action strings → allowlisted types.
-_FIX_ACTION_MAP: dict[str, str] = {
-    "restart_pod": "restart_pod",
-    "scale_deployment": "scale_deployment",
-    "rollout_restart": "rollout_restart",
-    "update_resource_limit": "update_resource_limit",
+# Handler lookup only. Never rewrite identity to a different kubectl verb.
+# increase_memory_limit / patch_resource are the same operation as update_resource_limit.
+_HANDLER_FOR_IDENTITY: dict[str, str] = {
     "increase_memory_limit": "update_resource_limit",
     "patch_resource": "update_resource_limit",
-    "rollback_deployment": "rollout_restart",
 }
 
 
@@ -107,7 +104,10 @@ class KubectlExecutionProvider:
                 },
             )
 
-        return handler.execute(context, dry_run=request.dry_run)
+        result = handler.execute(context, dry_run=request.dry_run)
+        if result.action_type != request.type:
+            result = result.model_copy(update={"action_type": request.type})
+        return result
 
     def execute(self, plan: FixPlan, *, state: IncidentState) -> ExecutionResult:
         """ExecutionProvider port: FixPlan → allowlisted ActionRequest → ExecutionResult."""
@@ -136,20 +136,16 @@ class KubectlExecutionProvider:
                 finished_at=datetime.now(tz=UTC),
             )
 
-        return self._to_execution_result(action_result, plan=plan, started_at=stamp)
+        return self._to_execution_result(
+            action_result,
+            plan=plan,
+            started_at=stamp,
+            action=request.type,
+        )
 
     def _request_from_plan(self, plan: FixPlan, state: IncidentState) -> ActionRequest:
-        action_name = ""
-        if state.execution_plan and state.execution_plan.action:
-            action_name = state.execution_plan.action
-        elif plan.actions:
-            params = plan.actions[0].params or {}
-            if isinstance(params.get("action"), str):
-                action_name = str(params["action"])
-            else:
-                action_name = plan.actions[0].action_type.value
-
-        mapped = _FIX_ACTION_MAP.get(action_name, action_name)
+        action_name = decision_action(state, plan=plan)
+        handler_type = _HANDLER_FOR_IDENTITY.get(action_name, action_name)
         target = (
             state.execution_plan.target
             if state.execution_plan
@@ -164,26 +160,22 @@ class KubectlExecutionProvider:
         parameters: dict[str, Any] = {}
         if plan.actions:
             parameters.update(plan.actions[0].params or {})
-        # Normalize memory limit keys used by remediation catalog.
-        if mapped == "update_resource_limit":
+        if handler_type == "update_resource_limit":
             parameters.setdefault("container_name", parameters.get("container", "app"))
             if "memory_limit" not in parameters and "limit" in parameters:
                 parameters["memory_limit"] = parameters["limit"]
             parameters.setdefault("memory_limit", "512Mi")
-        if mapped == "scale_deployment":
+        if handler_type == "scale_deployment":
             if "desired_replicas" not in parameters:
                 parameters["desired_replicas"] = int(parameters.get("replicas", 2))
 
         dry_run = bool(state.observations.extra.get("kubectl_dry_run", self._default_dry_run))
-        # Strip deployment/ prefix for pod restart targets when needed.
         clean_target = target
-        if mapped == "restart_pod" and target.startswith("pod/"):
+        if action_name == "restart_pod" and target.startswith("pod/"):
             clean_target = target.split("/", 1)[1]
-        elif mapped != "restart_pod" and target.startswith("deployment/"):
-            clean_target = target  # handlers accept deployment/name
 
         return ActionRequest(
-            type=mapped,
+            type=action_name,
             target=clean_target,
             namespace=namespace,
             parameters=parameters,
@@ -238,6 +230,7 @@ class KubectlExecutionProvider:
         *,
         plan: FixPlan,
         started_at: datetime,
+        action: str,
     ) -> ExecutionResult:
         if action_result.status == ActionStatus.BLOCKED_BY_POLICY:
             status = "skipped"
@@ -260,7 +253,7 @@ class KubectlExecutionProvider:
             executed=executed,
             success=success,
             status=status,  # type: ignore[arg-type]
-            action=action_result.action_type,
+            action=action,
             applied_changes=list(action_result.applied_changes),
             summary=action_result.reason or action_result.status,
             details={

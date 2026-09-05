@@ -9,17 +9,17 @@ def verify_hypotheses(state: IncidentState) -> dict[str, object]:
     Hypothesis verification node (state-in, partial-state-out).
 
     Challenges each hypothesis against observed evidence, applies a Bayesian-style
-    update, and re-ranks hypotheses by posterior likelihood.
+    update, and re-ranks hypotheses by posterior belief (``Hypothesis.likelihood``).
     """
     verifications, updated = verify_hypotheses_from_state(state)
     log = list(state.log)
     confirmed = sum(1 for v in verifications if v.result == "confirmed")
     contradicted = sum(1 for v in verifications if v.result == "contradicted")
     top_name = updated[0].description if updated else "<none>"
-    top_p = updated[0].likelihood if updated else 0.0
+    top_belief = updated[0].belief if updated else 0.0
     log.append(
         f"verify_hypotheses: confirmed={confirmed} contradicted={contradicted} "
-        f"top={top_name} p={top_p:.3f}"
+        f"top={top_name} belief={top_belief:.3f}"
     )
     return {
         "hypothesis_verifications": verifications,

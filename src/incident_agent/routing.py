@@ -2,14 +2,25 @@
 
 from __future__ import annotations
 
+from datetime import UTC
 from typing import Literal
 
-from incident_agent.contracts import IncidentState
+from incident_agent.contracts import (
+    ExecutionResult,
+    FixAction,
+    FixActionType,
+    FixPlan,
+    IncidentState,
+    RiskLevel,
+)
 
 # Default threshold for "high confidence". Overridable via observations.extra.
 DEFAULT_CONFIDENCE_THRESHOLD = 0.7
 
-RouteDecision = Literal["end", "replan"]
+INSUFFICIENT_CONFIDENCE = "INSUFFICIENT_CONFIDENCE"
+NOOP_DECISION = "NOOP"
+
+RouteDecision = Literal["execute", "replan", "escalate"]
 
 
 def get_confidence_threshold(state: IncidentState) -> float:
@@ -29,19 +40,18 @@ def route_on_confidence(state: IncidentState) -> RouteDecision:
     """
     Conditional router after the confidence node.
 
-    - High confidence (>= threshold) → end (enter execution lifecycle)
+    - High confidence (>= threshold) → execute
     - Low confidence and replan_count < max_replans → replan
-    - Low confidence and retries exhausted → end (still enter execution gate;
-      prepare/approve may skip unsafe actions)
+    - Low confidence and retries exhausted → escalate (NOOP, no mutation)
     """
     score = get_confidence_score(state)
     threshold = get_confidence_threshold(state)
 
     if score >= threshold:
-        return "end"
+        return "execute"
     if state.replan_count < state.max_replans:
         return "replan"
-    return "end"
+    return "escalate"
 
 
 def bump_replan(state: IncidentState) -> dict[str, object]:
@@ -57,6 +67,73 @@ def bump_replan(state: IncidentState) -> dict[str, object]:
     }
 
 
+def _hold_fix_plan(*, hypothesis_id: str | None, target_ref: str, notes: str) -> FixPlan:
+    return FixPlan(
+        hypothesis_id=hypothesis_id,
+        remediation_option_id=None,
+        risk=RiskLevel.LOW,
+        actions=[
+            FixAction(
+                action_type=FixActionType.NOOP,
+                target=target_ref,
+                params={"action": "noop", "reason": INSUFFICIENT_CONFIDENCE},
+                rationale=(
+                    "Insufficient confidence after maximum replans; "
+                    "escalate for human investigation."
+                ),
+            )
+        ],
+        notes=notes,
+    )
+
+
+def escalate_insufficient_confidence(state: IncidentState) -> dict[str, object]:
+    """Hold: do not execute the planned change. Investigation / escalation only."""
+    score = get_confidence_score(state)
+    threshold = get_confidence_threshold(state)
+    target_ref = str(state.observations.extra.get("target_ref", "<workload>"))
+    stamp = (
+        state.created_at
+        if state.created_at.tzinfo
+        else state.created_at.replace(tzinfo=UTC)
+    )
+    notes = (
+        f"NOOP {INSUFFICIENT_CONFIDENCE} score={score:.3f} "
+        f"threshold={threshold:.3f} replans={state.replan_count}/{state.max_replans}"
+    )
+    execution = ExecutionResult(
+        executed=False,
+        success=False,
+        status="skipped",
+        action="noop",
+        applied_changes=[],
+        summary="Execution skipped: insufficient confidence after maximum replans",
+        details={"decision": NOOP_DECISION, "reason": INSUFFICIENT_CONFIDENCE},
+        started_at=stamp,
+        finished_at=stamp,
+    )
+    log = list(state.log)
+    log.append(
+        f"escalate: decision={NOOP_DECISION} reason={INSUFFICIENT_CONFIDENCE} "
+        f"score={score:.3f} threshold={threshold:.3f}"
+    )
+    return {
+        "decision": NOOP_DECISION,
+        "decision_reason": INSUFFICIENT_CONFIDENCE,
+        "chosen_remediation_id": None,
+        "fix_plan": _hold_fix_plan(
+            hypothesis_id=state.chosen_hypothesis_id,
+            target_ref=target_ref,
+            notes=notes,
+        ),
+        "execution": execution,
+        "incident_resolved": False,
+        "route": "escalate",
+        "phase": "escalate",
+        "log": log,
+    }
+
+
 def finalize(
     state: IncidentState,
     *,
@@ -66,12 +143,17 @@ def finalize(
     """Terminal node: mark lifecycle done and persist episode to memory."""
     from incident_agent.providers import resolve_providers
 
-    route = "end"
+    route = state.route if state.route == "escalate" else "end"
     log = list(state.log)
     score = get_confidence_score(state)
     threshold = get_confidence_threshold(state)
 
-    if state.replan_count >= state.max_replans and score < threshold:
+    if state.decision == NOOP_DECISION:
+        log.append(
+            f"finalize: noop reason={state.decision_reason} "
+            f"count={state.replan_count}/{state.max_replans} score={score:.3f}"
+        )
+    elif state.replan_count >= state.max_replans and score < threshold:
         log.append(
             f"finalize: max_replans_reached count={state.replan_count}/{state.max_replans} "
             f"score={score:.3f}"

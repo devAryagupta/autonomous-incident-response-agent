@@ -23,7 +23,12 @@ from incident_agent.nodes import (
 )
 from incident_agent.nodes.enrich import enrich
 from incident_agent.providers import ProviderBundle, default_providers
-from incident_agent.routing import bump_replan, finalize, route_on_confidence
+from incident_agent.routing import (
+    bump_replan,
+    escalate_insufficient_confidence,
+    finalize,
+    route_on_confidence,
+)
 
 
 def _apply(state: IncidentState, updates: dict[str, object]) -> None:
@@ -119,6 +124,11 @@ def run_deterministic_lifecycle(
         if decision == "replan":
             _apply(state, bump_replan(state))
             continue
+        if decision == "escalate":
+            _apply(state, escalate_insufficient_confidence(state))
+            if not stop_before_execution:
+                _apply(state, finalize(state, providers=bundle))
+            break
         if stop_before_execution:
             state.phase = "score_confidence"
             break

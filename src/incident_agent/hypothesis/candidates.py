@@ -10,6 +10,7 @@ from dataclasses import dataclass
 class HypothesisCandidate:
     cause: str
     slug: str
+    # Catalog prior weight before observation boosts and normalization.
     prior: float
     # Patterns that support this underlying cause (not the symptom).
     patterns: tuple[re.Pattern[str], ...]

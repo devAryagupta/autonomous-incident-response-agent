@@ -91,8 +91,8 @@ def _infer_category(diagnosis: Diagnosis, context: list[str]) -> str:
         return "Invalid Configuration"
     return "Application Failure"
 
-# Purpose of this function is to score the candidate. Scoring the candidate by the prior probability, patterns, diagnosis evidence, and memory evidence.
-# Hypothesies Candidates are the possible suspects for the incident.
+# Unnormalized heuristic weight: catalog prior + pattern/memory boosts.
+# After ranking we normalize so Hypothesis.likelihood is a prior belief.
 def _score_candidate(
     cand: HypothesisCandidate,
     context: list[str],
@@ -174,37 +174,63 @@ def _evidence_with_source(state: IncidentState, lines: list[str]) -> list[Eviden
     return out
 
 
-def hypothesize_from_state(state: IncidentState) -> list[Hypothesis]:
-    """
-    Build ranked root-cause hypotheses from diagnosis + observation evidence.
+_Scored = tuple[HypothesisCandidate, float, list[str]]
 
-    Diagnosis names the symptom; hypotheses explain underlying causes.
-    Always returns at least two hypotheses with normalized likelihoods.
-    """
-    if state.diagnosis is None:
-        raise ValueError("state.diagnosis is required before hypothesize()")
 
-    top_n = max(2, int(state.observations.extra.get("top_n", 3)))
-    context = _context_lines(state)
-    category = _infer_category(state.diagnosis, context)
+def _candidates_for(diagnosis: Diagnosis, context: list[str]) -> tuple[str, tuple[HypothesisCandidate, ...]]:
+    category = _infer_category(diagnosis, context)
     candidates = CANDIDATES_BY_CATEGORY.get(category, CANDIDATES_BY_CATEGORY["Unknown"])
-    adjustments = _oom_prior_adjust(context) if category == "OOMKilled" else {}
-    memory_boosts = prior_adjustments_from_memory(
+    return category, candidates
+
+
+def _score_adjustments(
+    *,
+    category: str,
+    context: list[str],
+    candidates: tuple[HypothesisCandidate, ...],
+    similar_incidents: list[object],
+) -> tuple[dict[str, float], dict[str, float]]:
+    oom = _oom_prior_adjust(context) if category == "OOMKilled" else {}
+    memory = prior_adjustments_from_memory(
         candidate_slugs=[c.slug for c in candidates],
-        similar_incidents=list(state.similar_incidents),
+        similar_incidents=list(similar_incidents),
     )
+    return oom, memory
 
-    scored: list[tuple[HypothesisCandidate, float, list[str]]] = []
+
+def _apply_adjustments(
+    cand: HypothesisCandidate,
+    raw: float,
+    evidence_lines: list[str],
+    *,
+    oom: dict[str, float],
+    memory: dict[str, float],
+) -> _Scored:
+    raw += oom.get(cand.slug, 0.0)
+    mem_boost = memory.get(cand.slug, 0.0)
+    if mem_boost > 0:
+        raw += mem_boost
+        if _MEMORY_EVIDENCE_NOTE not in evidence_lines:
+            evidence_lines = [*evidence_lines, _MEMORY_EVIDENCE_NOTE]
+    return cand, max(raw, 0.01), evidence_lines
+
+
+def _score_candidates(
+    candidates: tuple[HypothesisCandidate, ...],
+    *,
+    context: list[str],
+    diagnosis: Diagnosis,
+    oom: dict[str, float],
+    memory: dict[str, float],
+) -> list[_Scored]:
+    scored: list[_Scored] = []
     for cand in candidates:
-        raw, evidence_lines = _score_candidate(cand, context, state.diagnosis)
-        raw += adjustments.get(cand.slug, 0.0)
-        mem_boost = memory_boosts.get(cand.slug, 0.0)
-        if mem_boost > 0:
-            raw += mem_boost
-            if _MEMORY_EVIDENCE_NOTE not in evidence_lines:
-                evidence_lines = [*evidence_lines, _MEMORY_EVIDENCE_NOTE]
-        scored.append((cand, max(raw, 0.01), evidence_lines))
+        raw, evidence_lines = _score_candidate(cand, context, diagnosis)
+        scored.append(_apply_adjustments(cand, raw, evidence_lines, oom=oom, memory=memory))
+    return scored
 
+
+def _rank_top(scored: list[_Scored], *, top_n: int) -> list[_Scored]:
     probs = _normalize([raw for _, raw, _ in scored])
     ranked = sorted(
         [
@@ -213,11 +239,14 @@ def hypothesize_from_state(state: IncidentState) -> list[Hypothesis]:
         ],
         key=lambda item: item[1],
         reverse=True,
-    )[: min(top_n, len(scored))]
+    )
+    return ranked[: min(top_n, len(scored))]
 
+
+def _to_hypotheses(state: IncidentState, ranked: list[_Scored]) -> list[Hypothesis]:
     top_probs = _normalize([prob for _, prob, _ in ranked])
     hypotheses: list[Hypothesis] = []
-    for rank, ((cand, _prob, evidence_lines), likelihood) in enumerate(
+    for rank, ((cand, _prob, evidence_lines), prior_belief) in enumerate(
         zip(ranked, top_probs, strict=True),
         start=1,
     ):
@@ -225,13 +254,43 @@ def hypothesize_from_state(state: IncidentState) -> list[Hypothesis]:
             Hypothesis(
                 hypothesis_id=f"h{rank}-{cand.slug}",
                 description=cand.cause,
-                likelihood=round(float(likelihood), 4),
+                likelihood=round(float(prior_belief), 4),
                 evidence=_evidence_with_source(state, evidence_lines),
                 verification_checks=list(cand.verification_checks),
                 remediation_key=cand.remediation_key,
             )
         )
+    return hypotheses
 
+
+def hypothesize_from_state(state: IncidentState) -> list[Hypothesis]:
+    """
+    Build ranked root-cause hypotheses from diagnosis + observation evidence.
+
+    Diagnosis names the symptom; hypotheses explain underlying causes.
+    ``Hypothesis.likelihood`` here is a normalized *prior belief* (sums to 1).
+    ``verify_hypotheses`` later overwrites it with posterior belief.
+    """
+    if state.diagnosis is None:
+        raise ValueError("state.diagnosis is required before hypothesize()")
+
+    top_n = max(2, int(state.observations.extra.get("top_n", 3)))
+    context = _context_lines(state)
+    category, candidates = _candidates_for(state.diagnosis, context)
+    oom, memory = _score_adjustments(
+        category=category,
+        context=context,
+        candidates=candidates,
+        similar_incidents=list(state.similar_incidents),
+    )
+    scored = _score_candidates(
+        candidates,
+        context=context,
+        diagnosis=state.diagnosis,
+        oom=oom,
+        memory=memory,
+    )
+    hypotheses = _to_hypotheses(state, _rank_top(scored, top_n=top_n))
     if len(hypotheses) < 2:
         raise RuntimeError("Hypothesis generation must return at least 2 hypotheses.")
     return hypotheses

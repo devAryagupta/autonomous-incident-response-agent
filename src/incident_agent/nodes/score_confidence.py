@@ -13,18 +13,16 @@ def score_confidence(
     """
     Heuristic confidence node (state-in, partial-state-out).
 
-    Heuristic:
-    - start with top hypothesis likelihood (0 if none)
-    - penalize if plan is noop
-    - penalize if validation failed
-    - map risk: low no penalty, medium -0.1, high -0.2
+    Legacy heuristic (not on the LangGraph / pipeline path; see compute_confidence).
+    Starts from top hypothesis belief and applies plan/validation/risk penalties.
+    The result is a routing-style score, not P(success).
     """
     if state.fix_plan is None:
         raise ValueError("state.fix_plan is required before score_confidence()")
 
-    top = state.hypotheses[0].likelihood if state.hypotheses else 0.0
-    score = float(top)
-    reasons: list[str] = [f"Top hypothesis likelihood={top:.3f}"]
+    top_belief = state.hypotheses[0].belief if state.hypotheses else 0.0
+    score = float(top_belief)
+    reasons: list[str] = [f"Top hypothesis belief={top_belief:.3f}"]
 
     if any(a.action_type == FixActionType.NOOP for a in state.fix_plan.actions):
         score -= 0.25

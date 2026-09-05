@@ -21,6 +21,8 @@ def _rx(*parts: str) -> re.Pattern[str]:
 
 
 # Keys must match Hypothesis.description values from the hypothesis engine.
+#verification specs gives you the evidence to support or contradict a hypothesis it gives the patterns to match the evidence and the evidence itself 
+# declaration of the verification specs map for the hypotheses
 VERIFICATION_SPECS: dict[str, VerificationSpec] = {
     "Memory leak": VerificationSpec(
         supporting_evidence=(

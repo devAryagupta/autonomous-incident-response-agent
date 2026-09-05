@@ -36,7 +36,14 @@ from incident_agent.nodes import (
 )
 from incident_agent.nodes.enrich import enrich
 from incident_agent.providers import ProviderBundle, default_providers
-from incident_agent.routing import bump_replan, finalize, route_on_confidence
+from incident_agent.routing import (
+    INSUFFICIENT_CONFIDENCE,
+    NOOP_DECISION,
+    bump_replan,
+    escalate_insufficient_confidence,
+    finalize,
+    route_on_confidence,
+)
 
 DEFAULT_GOLDEN_DATASET = (
     "data/synthetic/crashloopbackoff/goldendataset/crashloop_golden_dataset.jsonl"
@@ -60,6 +67,7 @@ class GoldenRunRow:
 class HypothesisSnapshot:
     hypothesis_id: str
     description: str
+    # Current belief (prior or posterior depending on snapshot timing).
     likelihood: float
     remediation_key: str | None
 
@@ -105,6 +113,7 @@ class RemediationOptionSnapshot:
     option_id: str
     action: str
     hypothesis_id: str | None
+    # Heuristic suitability, not P(success).
     confidence: float
     safety_score: float
     risk: str
@@ -116,7 +125,7 @@ class RemediationOptionSnapshot:
 @dataclass(frozen=True, slots=True)
 class ReasoningPassSnapshot:
     pass_index: int
-    route_decision: Literal["end", "replan"]
+    route_decision: Literal["execute", "replan", "escalate"]
     initial_hypotheses: list[HypothesisSnapshot]
     evidence_requests: list[EvidenceRequestSnapshot]
     evidence_results: list[EvidenceResultSnapshot]
@@ -193,6 +202,8 @@ def _predicted_root_cause(state: IncidentState) -> str | None:
 
 
 def _predicted_fix_kind(state: IncidentState) -> str | None:
+    if state.decision == NOOP_DECISION or state.decision_reason == INSUFFICIENT_CONFIDENCE:
+        return None
     if state.chosen_remediation_id and state.remediation_options:
         for opt in state.remediation_options:
             if opt.option_id == state.chosen_remediation_id:
@@ -434,14 +445,17 @@ def run_incident_with_reasoning_trace(
         if decision == "replan":
             _apply_updates(state, bump_replan(state))
             continue
+        if decision == "escalate":
+            _apply_updates(state, escalate_insufficient_confidence(state))
+            _apply_updates(state, finalize(state, providers=bundle))
+            break
+        _apply_updates(state, prepare_execution(state))
+        _apply_updates(state, pre_execute_validate(state))
+        _apply_updates(state, approve(state))
+        _apply_updates(state, execute_fix(state, providers=bundle))
+        _apply_updates(state, verify_outcome(state, providers=bundle))
+        _apply_updates(state, finalize(state, providers=bundle))
         break
-
-    _apply_updates(state, prepare_execution(state))
-    _apply_updates(state, pre_execute_validate(state))
-    _apply_updates(state, approve(state))
-    _apply_updates(state, execute_fix(state, providers=bundle))
-    _apply_updates(state, verify_outcome(state, providers=bundle))
-    _apply_updates(state, finalize(state, providers=bundle))
 
     row = row_from_run(incident, state)
     trace = GoldenReasoningTrace(

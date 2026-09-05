@@ -151,7 +151,7 @@ def test_low_effectiveness_restart_does_not_beat_safer_fix() -> None:
     ]
     decision = decide_remediation(_state_with_hyps(hyps, verifications=verifications))
     assert decision.chosen is not None
-    # Restart is lower blast radius but much lower confidence/effectiveness.
+    # Restart is lower blast radius but much lower suitability / expected effect.
     assert decision.chosen.action == "rollback_deployment"
     assert decision.fix_plan.actions[0].action_type == FixActionType.ROLLBACK_DEPLOYMENT
 
@@ -222,3 +222,31 @@ def test_blocks_when_no_option_meets_effectiveness_floor() -> None:
     assert decision.fix_plan.actions[0].params["action"] == "noop_investigate"
     assert decision.fix_plan.notes is not None
     assert "effectiveness floor" in decision.fix_plan.notes
+
+
+def test_option_confidence_ignores_verification_verdict() -> None:
+    """Posterior belief already encodes verification; verdict must not apply again."""
+    hyps = [
+        Hypothesis(
+            hypothesis_id="h1-memory_leak",
+            description="Memory leak",
+            likelihood=0.70,
+            remediation_key="Resource Constraint (OOMKilled)",
+        )
+    ]
+    contradicted = [
+        HypothesisVerification(
+            hypothesis_id="h1-memory_leak",
+            hypothesis="Memory leak",
+            result="contradicted",
+            confidence_delta=-0.3,
+        )
+    ]
+    with_verdict = decide_remediation(_state_with_hyps(hyps, verifications=contradicted))
+    without_verdict = decide_remediation(_state_with_hyps(hyps))
+    assert with_verdict.chosen is not None
+    assert without_verdict.chosen is not None
+    assert with_verdict.chosen.action == without_verdict.chosen.action
+    assert with_verdict.chosen.confidence == without_verdict.chosen.confidence
+    # increase_memory_limit catalog suitability 0.85 × belief 0.70
+    assert with_verdict.chosen.suitability == 0.595

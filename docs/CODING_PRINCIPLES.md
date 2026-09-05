@@ -100,6 +100,10 @@ def plan_from_hypotheses(*, hypotheses: list[Hypothesis], target_ref: str) -> Fi
 DEFAULT_CONFIDENCE_THRESHOLD = 0.7
 ```
 
+A float in `[0, 1]` is not automatically a probability. Hypothesis
+`likelihood` is **belief**; remediation `confidence` is **suitability**.
+See [SCORE_SEMANTICS.md](SCORE_SEMANTICS.md).
+
 Enums and action types use clear values (`restart_pod`, not `rp`).
 
 ---

@@ -73,6 +73,7 @@ def test_graph_topology_has_conditional_replan() -> None:
     assert "validate_fix" in nodes
     assert "confidence" in nodes
     assert "replan" in nodes
+    assert "escalate" in nodes
     assert "prepare_execution" in nodes
     assert "pre_execute_validate" in nodes
     assert "approve" in nodes

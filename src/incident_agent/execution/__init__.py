@@ -16,7 +16,7 @@ from incident_agent.execution.kubectl_client import (
     live_kubectl_client,
 )
 from incident_agent.execution.outcome import verify_execution_outcome
-from incident_agent.execution.plan import build_execution_plan
+from incident_agent.execution.plan import build_execution_plan, decision_action
 from incident_agent.execution.policy import ExecutionDecision, ExecutionPolicy
 from incident_agent.execution.preconditions import check_preconditions
 from incident_agent.execution.provider import KubectlExecutionProvider
@@ -37,6 +37,7 @@ __all__ = [
     "UnknownActionError",
     "build_execution_plan",
     "check_preconditions",
+    "decision_action",
     "live_kubectl_client",
     "verify_execution_outcome",
 ]

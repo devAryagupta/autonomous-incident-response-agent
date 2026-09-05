@@ -21,7 +21,12 @@ from incident_agent.nodes import (
 )
 from incident_agent.nodes.enrich import enrich
 from incident_agent.providers import PROVIDERS_CONFIG_KEY, ProviderBundle, default_providers
-from incident_agent.routing import bump_replan, finalize, route_on_confidence
+from incident_agent.routing import (
+    bump_replan,
+    escalate_insufficient_confidence,
+    finalize,
+    route_on_confidence,
+)
 
 try:
     from langgraph.graph import END, START, StateGraph
@@ -115,9 +120,9 @@ def build_graph():
 
     START -> enrich -> diagnose -> hypothesize -> collect_evidence
           -> verify_hypotheses -> plan_fix -> validate_fix -> confidence
+      ├── high confidence → prepare_execution → … → execute → finalize
       ├── low confidence & retries → replan → hypothesize ↺
-      └── else → prepare_execution → pre_execute_validate → approve
-               → execute → verify_outcome → finalize → END
+      └── still low after max replans → escalate (NOOP) → finalize
 
     Providers are injected via:
       invoke(state, config={"configurable": {"providers": ProviderBundle(...)}})
@@ -136,6 +141,7 @@ def build_graph():
     g.add_node("validate_fix", _with_phase(phase="validate_fix", fn=validate_fix))
     g.add_node("confidence", _confidence_node)
     g.add_node("replan", bump_replan)
+    g.add_node("escalate", _with_phase(phase="escalate", fn=escalate_insufficient_confidence))
     g.add_node(
         "prepare_execution",
         _with_phase(phase="prepare_execution", fn=prepare_execution),
@@ -162,11 +168,13 @@ def build_graph():
         "confidence",
         route_on_confidence,
         {
-            "end": "prepare_execution",
+            "execute": "prepare_execution",
             "replan": "replan",
+            "escalate": "escalate",
         },
     )
     g.add_edge("replan", "hypothesize")
+    g.add_edge("escalate", "finalize")
     g.add_edge("prepare_execution", "pre_execute_validate")
     g.add_edge("pre_execute_validate", "approve")
     g.add_edge("approve", "execute")

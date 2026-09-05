@@ -44,24 +44,55 @@ class Evidence(ContractBase):
 
 
 class Diagnosis(ContractBase):
+    """Symptom / category framing — not a posterior over root causes.
+
+    ``confidence`` is heuristic certainty of the *label* (OOMKilled vs config vs
+    app failure). Competing-cause belief lives on ``Hypothesis.likelihood``.
+    See docs/SCORE_SEMANTICS.md.
+    """
+
     schema_version: SchemaVersion = "1"
     summary: str
-    category: str = "Unknown" # Unknown is the default category for the diagnosis.
-    confidence: float = Field(ge=0.0, le=1.0)
+    category: str = "Unknown"  # Unknown is the default category for the diagnosis.
+    confidence: float = Field(
+        ge=0.0,
+        le=1.0,
+        description="Heuristic certainty of the diagnosis category, not P(cause).",
+    )
     evidence: list[Evidence] = Field(default_factory=list)
 
 
 class Hypothesis(ContractBase):
+    """Ranked root-cause candidate.
+
+    ``likelihood`` is current *belief* that this cause is true: a normalized
+    prior after ``hypothesize``, and a posterior after ``verify_hypotheses``.
+    The field name is historical — it is not statistical likelihood P(E|H),
+    and it is not a remediation success probability.
+    See docs/SCORE_SEMANTICS.md.
+    """
+
     schema_version: SchemaVersion = "1"
     hypothesis_id: str
     description: str
-    likelihood: float = Field(ge=0.0, le=1.0)
-    # likelihood is the confidence that the hypothesis is true.
+    likelihood: float = Field(
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Current belief that this hypothesis is the cause. "
+            "Prior after hypothesize(); posterior after verify_hypotheses()."
+        ),
+    )
     evidence: list[Evidence] = Field(default_factory=list)
     # SRE checks the verification engine challenges against observations.
     verification_checks: list[str] = Field(default_factory=list)
     # Bridge to the Stage-0 remediation catalog cause string (planner match key).
     remediation_key: str | None = None
+
+    @property
+    def belief(self) -> float:
+        """Current belief (same stored value as ``likelihood``)."""
+        return self.likelihood
 
 
 VerificationResult = Literal["confirmed", "contradicted", "inconclusive"]
@@ -83,7 +114,7 @@ class HypothesisVerification(ContractBase):
     expected_evidence: list[str] = Field(default_factory=list)
     observed_evidence: list[str] = Field(default_factory=list)
     result: VerificationResult = "inconclusive"
-    # Posterior − prior for this hypothesis before cross-hypothesis renormalization.
+    # Belief change (posterior − prior) before cross-hypothesis renormalization.
     confidence_delta: float = 0.0
 
 
@@ -118,6 +149,7 @@ class EvidenceResult(ContractBase):
 class FixActionType(StrEnum):
     RESTART_POD = "restart_pod"
     ROLLBACK_DEPLOYMENT = "rollback_deployment"
+    ROLLOUT_RESTART = "rollout_restart"
     SCALE_DEPLOYMENT = "scale_deployment"
     PATCH_CONFIG = "patch_config"
     PATCH_RESOURCE = "patch_resource"
@@ -142,7 +174,12 @@ ImpactLevel = Literal["low", "medium", "high"]
 
 
 class RemediationOption(ContractBase):
-    """Candidate safe action (decision only — not executed yet)."""
+    """Candidate safe action (decision only — not executed yet).
+
+    ``confidence`` is heuristic *suitability* (catalog weight × hypothesis
+    belief), not a probability that the action will succeed.
+    ``safety_score`` is a separate ranking heuristic. See docs/SCORE_SEMANTICS.md.
+    """
 
     schema_version: SchemaVersion = "1"
     option_id: str
@@ -155,11 +192,24 @@ class RemediationOption(ContractBase):
     reversibility: ImpactLevel = "medium"
     # Whether a clean automated recovery path exists.
     rollback_possible: bool = True
-    confidence: float = Field(ge=0.0, le=1.0, default=0.5)
-    # Composite safety score used for ranking (higher = safer/better).
+    confidence: float = Field(
+        ge=0.0,
+        le=1.0,
+        default=0.5,
+        description=(
+            "Heuristic suitability of this action for the hypothesized cause "
+            "(catalog weight × belief). Not P(action succeeds)."
+        ),
+    )
+    # Composite safety rank used among suitable options (higher = safer/better).
     safety_score: float = Field(ge=0.0, le=1.0, default=0.0)
     hypothesis_id: str | None = None
     rationale: str = ""
+
+    @property
+    def suitability(self) -> float:
+        """Heuristic action suitability (same stored value as ``confidence``)."""
+        return self.confidence
 
 
 class FixPlan(ContractBase):
@@ -195,6 +245,12 @@ class ValidationVerdict(ContractBase):
 
 
 class ConfidenceScore(ContractBase):
+    """Heuristic routing / gate score (replan vs enter execution).
+
+    Not interchangeable with hypothesis belief, remediation suitability, or a
+    calibrated P(incident resolved). See docs/SCORE_SEMANTICS.md.
+    """
+
     schema_version: SchemaVersion = "1"
     score: float = Field(ge=0.0, le=1.0)
     explanation: str = Field(validation_alias="reason")
@@ -264,7 +320,7 @@ class ResourceRef(ContractBase):
     cluster: str | None = None
 
 
-class Observations(ContractBase):
+class   Observations(ContractBase):
     """Raw signals the agent reasons over.
 
     Deterministic baseline: only logs/events strings.
@@ -287,6 +343,7 @@ IncidentPhase = Literal[
     "validate_fix",
     "score_confidence",
     "replan",
+    "escalate",
     "prepare_execution",
     "pre_execute_validate",
     "approve",
@@ -313,6 +370,9 @@ class IncidentState(ContractBase):
     thread_id: str | None = None
     phase: IncidentPhase = "ingest"
     route: str | None = None
+    # Terminal hold: "NOOP" + INSUFFICIENT_CONFIDENCE when replans are exhausted.
+    decision: str | None = None
+    decision_reason: str | None = None
 
     # impacted resource (optional in deterministic baselines)
     resource: ResourceRef | None = None
@@ -331,7 +391,9 @@ class IncidentState(ContractBase):
     fix_plan: FixPlan | None = None
     validation: list[ValidationResult] = Field(default_factory=list)
     validation_verdict: ValidationVerdict | None = None
+    # Routing / gate score object (not hypothesis belief, not P(success)).
     confidence: ConfidenceScore | None = None
+    # Denormalized copy of confidence.score for routers (same meaning).
     confidence_score: float | None = None
     # MemoryProvider output (empty under NoMemory)
     similar_incidents: list[dict[str, Any]] = Field(default_factory=list)
