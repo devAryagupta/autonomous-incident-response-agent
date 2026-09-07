@@ -155,6 +155,14 @@ def _scan_extra(acc: _Accumulator, extra: dict) -> None:
             acc.has_oomkilled = True
             acc.add("describe", "OOMKilled event detected")
 
+    restarts = extra.get("restart_count")
+    if isinstance(restarts, int) and restarts > 0:
+        acc.add("describe", f"{restarts} restarts")
+
+    memory_limit = extra.get("memory_limit")
+    if isinstance(memory_limit, str) and memory_limit.strip():
+        acc.add("describe", f"memory limit {memory_limit.strip()}")
+
     metrics = extra.get("metrics")
     if isinstance(metrics, dict):
         _scan_metrics_dict(acc, metrics)

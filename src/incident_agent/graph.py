@@ -37,6 +37,12 @@ except Exception as e:  # pragma: no cover
     ) from e
 
 
+# LangGraph 1.2 injects config only when the parameter is annotated as
+# RunnableConfig (or Optional[RunnableConfig]). Do not write
+# `RunnableConfig | None` here — that string is ignored and providers
+# fall back to synthetic defaults.
+
+
 def _config_from_runnable(config: RunnableConfig | None) -> dict[str, Any] | None:
     if config is None:
         return None
@@ -53,7 +59,7 @@ def _with_phase(*, phase: str, fn):
 
     def _wrapped(
         state: IncidentState,
-        config: RunnableConfig | None = None,
+        config: RunnableConfig = None,
     ) -> dict[str, object]:
         _ = config
         updates = dict(fn(state))
@@ -65,14 +71,14 @@ def _with_phase(*, phase: str, fn):
 
 def _enrich_node(
     state: IncidentState,
-    config: RunnableConfig | None = None,
+    config: RunnableConfig = None,
 ) -> dict[str, object]:
     return enrich(state, config=_config_from_runnable(config))
 
 
 def _collect_evidence_node(
     state: IncidentState,
-    config: RunnableConfig | None = None,
+    config: RunnableConfig = None,
 ) -> dict[str, object]:
     updates = dict(collect_evidence(state, config=_config_from_runnable(config)))
     updates["phase"] = "collect_evidence"
@@ -81,7 +87,7 @@ def _collect_evidence_node(
 
 def _confidence_node(
     state: IncidentState,
-    config: RunnableConfig | None = None,
+    config: RunnableConfig = None,
 ) -> dict[str, object]:
     _ = config
     updates = dict(compute_confidence(state))
@@ -91,7 +97,7 @@ def _confidence_node(
 
 def _pre_execute_validate_node(
     state: IncidentState,
-    config: RunnableConfig | None = None,
+    config: RunnableConfig = None,
 ) -> dict[str, object]:
     updates = dict(pre_execute_validate(state, config=_config_from_runnable(config)))
     updates["phase"] = "pre_execute_validate"
@@ -100,7 +106,7 @@ def _pre_execute_validate_node(
 
 def _execute_node(
     state: IncidentState,
-    config: RunnableConfig | None = None,
+    config: RunnableConfig = None,
 ) -> dict[str, object]:
     updates = dict(execute_fix(state, config=_config_from_runnable(config)))
     updates["phase"] = "execute"
@@ -109,7 +115,7 @@ def _execute_node(
 
 def _verify_outcome_node(
     state: IncidentState,
-    config: RunnableConfig | None = None,
+    config: RunnableConfig = None,
 ) -> dict[str, object]:
     updates = dict(verify_outcome(state, config=_config_from_runnable(config)))
     updates["phase"] = "verify_outcome"
@@ -118,7 +124,7 @@ def _verify_outcome_node(
 
 def _finalize_node(
     state: IncidentState,
-    config: RunnableConfig | None = None,
+    config: RunnableConfig = None,
 ) -> dict[str, object]:
     return finalize(state, config=_config_from_runnable(config))
 

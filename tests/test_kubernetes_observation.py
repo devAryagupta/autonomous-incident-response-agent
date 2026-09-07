@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from types import SimpleNamespace
 
 from incident_agent.contracts import (
     Alert,
@@ -12,6 +13,7 @@ from incident_agent.contracts import (
     ResourceRef,
 )
 from incident_agent.diagnosis.engine import CATEGORY_OOMKILLED, diagnose_observations
+from incident_agent.graph import GRAPH
 from incident_agent.nodes.enrich import enrich
 from incident_agent.providers import (
     ContainerStatusSnapshot,
@@ -21,6 +23,7 @@ from incident_agent.providers import (
     PodSnapshot,
     k8s_observation_providers,
 )
+from incident_agent.providers.kubernetes import _pod_from_v1, _split_log_payload
 
 
 class FakeKubernetesClient:
@@ -291,6 +294,14 @@ def test_k8s_bundle_enrich_leaves_reasoning_untouched() -> None:
     assert any("OOMKilled" in line for line in obs.events)
 
 
+def test_graph_invoke_uses_injected_k8s_observations() -> None:
+    bundle = k8s_observation_providers(client=_fake_oom_client())
+    out = GRAPH.invoke(_state_for_pod(), providers=bundle)
+    assert out.observations.extra["observation_provider"] == "KubernetesObservationProvider"
+    assert out.diagnosis is not None
+    assert out.diagnosis.category == CATEGORY_OOMKILLED
+
+
 def test_resolve_from_target_ref_without_resource() -> None:
     pod = _oom_pod()
     client = FakeKubernetesClient(pods={("payments", pod.name): pod})
@@ -308,3 +319,58 @@ def test_missing_pod_reports_error_without_raising() -> None:
     obs = provider.fetch_observations(_state_for_pod())
     assert obs.extra["error"] == "pod_not_found"
     assert obs.extra["provider"] == "kubernetes"
+
+
+def test_split_log_payload_decodes_bytes() -> None:
+    lines = _split_log_payload(b"Allocated 10 MB\nAllocated 20 MB\n")
+    assert lines == ["Allocated 10 MB", "Allocated 20 MB"]
+
+
+def test_pod_from_v1_reads_oom_from_last_state_while_waiting() -> None:
+    pod = SimpleNamespace(
+        metadata=SimpleNamespace(
+            namespace="default",
+            name="oom-demo",
+            labels={},
+            owner_references=[],
+        ),
+        spec=SimpleNamespace(
+            containers=[
+                SimpleNamespace(
+                    resources=SimpleNamespace(
+                        requests={"memory": "64Mi"},
+                        limits={"memory": "128Mi"},
+                    ),
+                    env=[],
+                    env_from=[],
+                    volume_mounts=[],
+                )
+            ],
+            volumes=[],
+            image_pull_secrets=[],
+        ),
+        status=SimpleNamespace(
+            phase="Running",
+            container_statuses=[
+                SimpleNamespace(
+                    name="oom-demo",
+                    image="oom-demo:latest",
+                    ready=False,
+                    restart_count=33,
+                    state=SimpleNamespace(
+                        waiting=SimpleNamespace(reason="CrashLoopBackOff", message="back-off"),
+                        terminated=None,
+                        running=None,
+                    ),
+                    last_state=SimpleNamespace(
+                        terminated=SimpleNamespace(reason="OOMKilled", exit_code=137, message=None),
+                    ),
+                )
+            ],
+        ),
+    )
+    snapshot = _pod_from_v1(pod)
+    assert snapshot.waiting_reason == "CrashLoopBackOff"
+    assert snapshot.terminated_reason == "OOMKilled"
+    assert snapshot.exit_code == 137
+    assert snapshot.memory_limit == "128Mi"

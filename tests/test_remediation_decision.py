@@ -88,6 +88,43 @@ def test_oom_chooses_increase_memory_over_rollback() -> None:
     assert decision.fix_plan.remediation_option_id == decision.chosen.option_id
 
 
+def test_unconfirmed_causes_plan_investigate() -> None:
+    hyps = [
+        Hypothesis(
+            hypothesis_id="h1-memory_leak",
+            description="Memory leak",
+            likelihood=0.61,
+            remediation_key="Resource Constraint (OOMKilled)",
+        ),
+        Hypothesis(
+            hypothesis_id="h2-memory_limit_too_low",
+            description="Memory limit too low",
+            likelihood=0.28,
+            remediation_key="Resource Constraint (OOMKilled)",
+        ),
+        Hypothesis(
+            hypothesis_id="h3-traffic_spike",
+            description="Traffic spike",
+            likelihood=0.11,
+            remediation_key="Resource Constraint (OOMKilled)",
+        ),
+    ]
+    verifications = [
+        HypothesisVerification(
+            hypothesis_id=hyp.hypothesis_id,
+            hypothesis=hyp.description,
+            result="inconclusive",
+            confidence_delta=0.0,
+        )
+        for hyp in hyps
+    ]
+    decision = decide_remediation(_state_with_hyps(hyps, verifications=verifications))
+    assert decision.chosen is None
+    assert decision.matched_rule == "remediation_decision.v1:unresolved_cause"
+    assert decision.fix_plan.actions[0].action_type == FixActionType.NOOP
+    assert "root cause not yet distinguishable" in (decision.fix_plan.actions[0].rationale or "")
+
+
 def test_secret_prefers_config_fix_with_low_blast_radius() -> None:
     hyps = [
         Hypothesis(
@@ -235,15 +272,15 @@ def test_option_confidence_ignores_verification_verdict() -> None:
             remediation_key="Resource Constraint (OOMKilled)",
         )
     ]
-    contradicted = [
+    confirmed = [
         HypothesisVerification(
             hypothesis_id="h1-memory_leak",
             hypothesis="Memory leak",
-            result="contradicted",
-            confidence_delta=-0.3,
+            result="confirmed",
+            confidence_delta=0.2,
         )
     ]
-    with_verdict = decide_remediation(_state_with_hyps(hyps, verifications=contradicted))
+    with_verdict = decide_remediation(_state_with_hyps(hyps, verifications=confirmed))
     without_verdict = decide_remediation(_state_with_hyps(hyps))
     assert with_verdict.chosen is not None
     assert without_verdict.chosen is not None

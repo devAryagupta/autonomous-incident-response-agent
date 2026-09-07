@@ -98,6 +98,43 @@ def test_verify_memory_growth_confirms_leak_and_downranks_traffic() -> None:
     assert hyps[0].likelihood > hyps[-1].likelihood
 
 
+def test_oom_symptom_only_leaves_causes_inconclusive() -> None:
+    diagnosis = Diagnosis(
+        summary="OOMKilled",
+        category="OOMKilled",
+        confidence=0.9,
+        evidence=[
+            Evidence(source="events", text="OOMKilled event detected"),
+            Evidence(source="other", text="Container terminated with exit code 137"),
+        ],
+    )
+    state = _base_state(
+        diagnosis=diagnosis,
+        events=[
+            "Warning  OOMKilled  kubelet  Container killed due to OOM",
+            "Warning  BackOff  kubelet  Back-off restarting failed container",
+        ],
+        logs=["OOMKilled: Container was killed due to memory usage", "exit status 137"],
+    )
+    state.observations.extra["restart_count"] = 38
+    state.observations.extra["memory_limit"] = "128Mi"
+    state.hypotheses = hypothesize(state)["hypotheses"]  # type: ignore[assignment]
+
+    updates = verify_hypotheses(state)
+    verifications = {v.hypothesis: v.result for v in updates["hypothesis_verifications"]}
+
+    assert updates["chosen_hypothesis_id"] is None
+    assert verifications == {
+        "Memory leak": "inconclusive",
+        "Memory limit too low": "inconclusive",
+        "Traffic spike": "inconclusive",
+    }
+    assert any(
+        "OOM confirmed, root cause not yet distinguishable" in line
+        for line in updates["log"]
+    )
+
+
 def test_verify_contradiction_reduces_likelihood() -> None:
     state = _base_state(
         diagnosis=Diagnosis(summary="OOMKilled", category="OOMKilled", confidence=0.8),

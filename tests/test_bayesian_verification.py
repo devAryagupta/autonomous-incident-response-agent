@@ -159,7 +159,7 @@ def test_prometheus_provider_fulfills_contract_evidence_request() -> None:
     )
     assert result.success
     assert result.data["series"] == [300.0, 450.0, 700.0, 900.0]
-    assert "Memory increased from 300.0Mi to 900.0Mi" in result.summary
+    assert "Memory increased from 300Mi to 900Mi" in result.summary
 
 
 def test_telemetry_and_hypothesis_schemas() -> None:

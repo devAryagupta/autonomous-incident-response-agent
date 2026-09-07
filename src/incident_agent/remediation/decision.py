@@ -14,6 +14,10 @@ from incident_agent.contracts import (
     RiskLevel,
 )
 from incident_agent.remediation.options import RemediationTemplate, templates_for
+from incident_agent.verification.conclusion import (
+    confirmed_verifications,
+    summarize_cause_resolution,
+)
 
 _LEVEL = {"low": 0.0, "medium": 0.5, "high": 1.0}
 
@@ -30,6 +34,7 @@ _MIN_VIABLE_SUITABILITY = 0.40
 # then choose the safest among them.
 _EFFECTIVENESS_MARGIN = 0.10
 _BLOCKED_INEFFECTIVE_RULE = "remediation_decision.v1:blocked_ineffective"
+_UNRESOLVED_CAUSE_RULE = "remediation_decision.v1:unresolved_cause"
 
 
 @dataclass(frozen=True, slots=True)
@@ -165,6 +170,27 @@ def _noop_plan(
     )
 
 
+def _unresolved_cause_decision(
+    state: IncidentState,
+    *,
+    target_ref: str,
+) -> RemediationDecision:
+    """Symptom may be certain; no competing cause cleared verification."""
+    conclusion = summarize_cause_resolution(state)
+    plan = _noop_plan(
+        hypothesis_id=None,
+        target_ref=target_ref,
+        rationale=conclusion,
+        notes=f"{conclusion}; collect distinguishing evidence before mutating.",
+    )
+    return RemediationDecision(
+        options=[],
+        chosen=None,
+        fix_plan=plan,
+        matched_rule=_UNRESOLVED_CAUSE_RULE,
+    )
+
+
 def decide_remediation(state: IncidentState) -> RemediationDecision:
     """
     Generate remediation candidates from verified hypotheses, score them for
@@ -176,6 +202,11 @@ def decide_remediation(state: IncidentState) -> RemediationDecision:
         raise ValueError("state.hypotheses is required before decide_remediation()")
 
     target_ref = str(state.observations.extra.get("target_ref", "<workload>"))
+
+    if state.hypothesis_verifications and not confirmed_verifications(
+        state.hypothesis_verifications
+    ):
+        return _unresolved_cause_decision(state, target_ref=target_ref)
 
     # Focus on the highest-belief hypotheses (already posterior-ranked after verify).
     focus = list(state.hypotheses[: max(1, min(3, len(state.hypotheses)))])

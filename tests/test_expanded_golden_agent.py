@@ -19,7 +19,7 @@ def test_expanded_golden_agent_headline_metrics() -> None:
     diagnosis_correct = sum(row.diagnosis_correct for row in rows)
     fix_correct = sum(row.fix_correct for row in rows)
 
-    # Committed fixes only. Plans that stay below the gate after max replans
-    # are NOOP / INSUFFICIENT_CONFIDENCE and do not count as a selected fix.
+    # Committed fixes only. Symptom-only OOM (no distinguishing cause
+    # evidence) and low-confidence holds stay NOOP and do not count.
     assert diagnosis_correct == 32
-    assert fix_correct == 18
+    assert fix_correct == 16

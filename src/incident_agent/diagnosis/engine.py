@@ -53,6 +53,11 @@ def _match_oom(extracted: ExtractedEvidence) -> _CauseMatch | None:
         "Exit code 137 indicates SIGKILL / OOMKilled",
     )
     texts = tuple(t for t in preferred if any(i.text == t for i in extracted.items))
+    texts = texts + tuple(
+        item.text
+        for item in extracted.items
+        if item.text.endswith(" restarts") or item.text.startswith("memory limit ")
+    )
     if not texts:
         texts = ("OOMKilled signal detected",)
     confidence = 0.95 if len(texts) >= 3 else 0.9

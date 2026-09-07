@@ -730,9 +730,7 @@ class _ApiKubernetesClient:
             )
         except Exception:  # noqa: BLE001
             return []
-        if not raw:
-            return []
-        return [line for line in str(raw).splitlines() if line.strip()]
+        return _split_log_payload(raw)
 
     def secret_exists(self, namespace: str, secret_name: str) -> bool:
         try:
@@ -740,6 +738,17 @@ class _ApiKubernetesClient:
             return True
         except Exception:  # noqa: BLE001
             return False
+
+
+def _split_log_payload(raw: Any) -> list[str]:
+    """Decode kube API log payloads (str or bytes) into non-empty lines."""
+    if raw is None:
+        return []
+    if isinstance(raw, (bytes, bytearray)):
+        text = bytes(raw).decode("utf-8", errors="replace")
+    else:
+        text = str(raw)
+    return [line for line in text.splitlines() if line.strip()]
 
 
 def _selector_from_match_labels(selector: Any) -> str | None:
@@ -802,13 +811,17 @@ def _pod_from_v1(pod: Any) -> PodSnapshot:
                 exit_code = int(c_exit)
         elif running is not None:
             c_state = "running"
-        elif last_term is not None:
-            c_state = "terminated"
-            c_reason = getattr(last_term, "reason", None)
-            c_exit = getattr(last_term, "exit_code", None)
-            terminated_reason = terminated_reason or (str(c_reason) if c_reason else None)
-            if c_exit is not None and exit_code is None:
-                exit_code = int(c_exit)
+
+        # CrashLoopBackOff spends most of its time Waiting; OOMKilled lives on lastState.
+        if last_term is not None:
+            last_reason = getattr(last_term, "reason", None)
+            last_exit = getattr(last_term, "exit_code", None)
+            if terminated_reason is None and last_reason:
+                terminated_reason = str(last_reason)
+            if exit_code is None and last_exit is not None:
+                exit_code = int(last_exit)
+            if c_exit is None and last_exit is not None:
+                c_exit = last_exit
 
         containers.append(
             ContainerStatusSnapshot(

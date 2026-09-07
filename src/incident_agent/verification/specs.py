@@ -41,10 +41,7 @@ VERIFICATION_SPECS: dict[str, VerificationSpec] = {
         support_patterns=(
             _rx(
                 r"gradual|grew|growth|increasing|increased from",
-                r"\d+\s*mi.+\d+\s*mi",
-                r"heap|leak",
-                r"repeated|again|multiple",
-                r"back-?off restarting",
+                r"heap usage|memory leak",
             ),
         ),
         contradict_patterns=(

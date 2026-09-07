@@ -46,8 +46,10 @@ This is the only stack on `START → … → verify_hypotheses → plan_fix`.
 - Not a sequential filter over independent observations. Each pass
   re-scores the **current** observation blob. Replan repeats that on
   accumulated lines; it does not multiply independent evidence terms.
-- Not “none of the above.” Renormalization forces the open set to sum to
-  1 even when every cause is weakly supported.
+- Not “none of the above” for **belief numbers**. Renormalization still
+  forces the open set to sum to 1. Planning does **not** treat that
+  ranking as a chosen cause when every `HypothesisVerification.result`
+  is `inconclusive`.
 - Not a live metrics pull. It only reads what `collect_evidence` already
   merged into `Observations`.
 - Independent-evidence is assumed and is false: one log line can hit

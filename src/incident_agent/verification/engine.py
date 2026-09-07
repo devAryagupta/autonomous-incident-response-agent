@@ -24,7 +24,7 @@ from incident_agent.verification.specs import VerificationSpec, spec_for
 
 # THIS REGEX WILL BE USED TO MATCH THE MEMORY GROWTH OBSERVATIONS
 _MEMORY_GROWTH_REGEX = re.compile(
-    r"(?:memory|rss|heap)?\s*(?:increased|grew|from)?\s*(\d+)\s*mi\b.*?\b(\d+)\s*mi\b",
+    r"(?:memory|rss|heap)?\s*(?:increased|grew)\s+(?:from\s+)?(\d+)\s*mi\b.*?\b(\d+)\s*mi\b",
     re.IGNORECASE,
 )
 
@@ -118,6 +118,17 @@ def _dedupe(values: list[str]) -> list[str]:
     return out
 
 
+def _metrics_for_verification(observations: Observations) -> dict[str, object]:
+    """Ignore synthetic stubs on a live cluster; keep Prometheus series."""
+    raw = observations.extra.get("metrics", {})
+    if not isinstance(raw, dict):
+        return {}
+    if observations.extra.get("provider") == "kubernetes":
+        if raw.get("provider") != "prometheus":
+            return {}
+    return raw
+
+
 def _memory_growth_observations(lines: list[str], observations: Observations) -> list[str]:
     found: list[str] = []
     for line in lines:
@@ -126,7 +137,7 @@ def _memory_growth_observations(lines: list[str], observations: Observations) ->
             low, high = int(match.group(1)), int(match.group(2))
             if high > low:
                 found.append(f"Memory increased from {low}Mi to {high}Mi")
-    series = observations.extra.get("metrics", {})
+    series = _metrics_for_verification(observations)
     if isinstance(series, dict):
         mem = series.get("memory_mi") or series.get("memory") or series.get("series", {})
         if isinstance(mem, dict):
@@ -136,7 +147,8 @@ def _memory_growth_observations(lines: list[str], observations: Observations) ->
                 found.append(f"Memory increased from {int(start)}Mi to {int(end)}Mi")
         elif isinstance(mem, list) and len(mem) >= 2:
             try:
-                start_v, end_v = float(mem[0]), float(mem[-1])
+                start_v = float(mem[0])
+                end_v = max(float(value) for value in mem)
             except (TypeError, ValueError):
                 start_v = end_v = 0.0
             if end_v > start_v:
@@ -178,6 +190,18 @@ def _challenge(
     required_total = len(spec.required_patterns)
     required_satisfied = required_total > 0 and required_matches >= required_total
 
+    # Symptom-only support (CrashLoop, OOMKilled, a memory limit number) is
+    # not enough to confirm a cause when the spec names required evidence.
+    if spec.required_patterns and not required_satisfied:
+        return _unconfirmed_challenge(
+            spec,
+            support=deduped_support,
+            contradict=deduped_contradict,
+            required=deduped_required,
+            has_support=has_support,
+            has_contradict=has_contradict,
+            has_required_signal=has_required_signal,
+        )
     if required_satisfied and not has_contradict:
         strong = len(deduped_required) >= 2 or len(deduped_support) >= 2
         return _Challenge(
@@ -235,15 +259,42 @@ def _challenge(
             result="inconclusive",
             bayes_factor=_BF_MIXED,
         )
+    return _unconfirmed_challenge(
+        spec,
+        support=deduped_support,
+        contradict=deduped_contradict,
+        required=deduped_required,
+        has_support=has_support,
+        has_contradict=has_contradict,
+        has_required_signal=has_required_signal,
+    )
+
+
+def _unconfirmed_challenge(
+    spec: VerificationSpec,
+    *,
+    support: list[str],
+    contradict: list[str],
+    required: list[str],
+    has_support: bool,
+    has_contradict: bool,
+    has_required_signal: bool,
+) -> _Challenge:
+    if has_contradict and not has_support and not has_required_signal:
+        result, factor = "contradicted", _BF_CONTRADICTED
+    elif has_contradict:
+        result, factor = "inconclusive", _BF_MIXED
+    else:
+        result, factor = "inconclusive", _BF_INCONCLUSIVE
     return _Challenge(
         supporting_expected=spec.supporting_evidence,
         contradicting_expected=spec.contradicting_evidence,
         required_expected=spec.required_evidence,
-        observed_supporting=tuple(deduped_support[:4]),
-        observed_contradicting=tuple(deduped_contradict[:4]),
-        observed_required=tuple(deduped_required[:4]),
-        result="inconclusive",
-        bayes_factor=_BF_INCONCLUSIVE,
+        observed_supporting=tuple(support[:4]),
+        observed_contradicting=tuple(contradict[:4]),
+        observed_required=tuple(required[:4]),
+        result=result,
+        bayes_factor=factor,
     )
 
 

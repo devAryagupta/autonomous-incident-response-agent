@@ -35,6 +35,8 @@ def _merge_metrics(extra: dict[str, Any], results: list[EvidenceResult]) -> dict
         if "working_set_mi" in result.data:
             metrics["working_set_mi"] = result.data["working_set_mi"]
             metrics["limit_mi"] = result.data.get("limit_mi")
+        if result.data.get("provider") == "prometheus":
+            metrics["provider"] = "prometheus"
     if series:
         metrics["series"] = series
     metrics.setdefault("provider", metrics.get("provider", "synthetic"))

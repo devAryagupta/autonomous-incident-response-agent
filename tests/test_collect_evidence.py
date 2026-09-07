@@ -4,8 +4,8 @@ from incident_agent.contracts import (
     Alert,
     Diagnosis,
     Evidence,
-    EvidenceResult,
     EvidenceRequest,
+    EvidenceResult,
     Hypothesis,
     IncidentState,
     Observations,
@@ -110,6 +110,23 @@ def test_synthetic_observation_provider_executes_restart_history() -> None:
     assert result.success
     assert "restart_count" in result.data
     assert "Restart history" in result.summary
+
+
+def test_synthetic_metrics_do_not_invent_series_on_live_kubernetes() -> None:
+    state = _oom_state()
+    state.observations.extra["provider"] = "kubernetes"
+    state.observations.extra["observation_provider"] = "KubernetesObservationProvider"
+    req = EvidenceRequest(
+        request_id="er-live",
+        type="metric",
+        query="container_memory_usage_bytes",
+        target="payment-service",
+    )
+    result = SyntheticMetricsProvider().execute_evidence_request(req, state=state)
+    assert result.success
+    assert result.data.get("unavailable") is True
+    assert "900Mi" not in result.summary
+    assert "Prometheus not configured" in result.summary
 
 
 def test_collected_evidence_feeds_verification() -> None:
