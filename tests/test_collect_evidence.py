@@ -4,8 +4,8 @@ from incident_agent.contracts import (
     Alert,
     Diagnosis,
     Evidence,
-    EvidenceResult,
     EvidenceRequest,
+    EvidenceResult,
     Hypothesis,
     IncidentState,
     Observations,
@@ -79,9 +79,9 @@ def test_collect_evidence_fulfills_requests_and_enriches_observations() -> None:
 
     assert len(results) == len(requests)
     assert all(r.success for r in results)
-    assert any("Memory increased from" in (r.summary or "") for r in results)
+    assert any("Sustained memory growth from" in (r.summary or "") for r in results)
     assert obs.extra["metrics"]["memory_mi"]["end"] == 900
-    assert any("Memory increased from" in line for line in obs.logs)
+    assert any("Sustained memory growth from" in line for line in obs.logs)
 
 
 def test_synthetic_metrics_provider_executes_evidence_request() -> None:
@@ -110,6 +110,23 @@ def test_synthetic_observation_provider_executes_restart_history() -> None:
     assert result.success
     assert "restart_count" in result.data
     assert "Restart history" in result.summary
+
+
+def test_synthetic_metrics_do_not_invent_series_on_live_kubernetes() -> None:
+    state = _oom_state()
+    state.observations.extra["provider"] = "kubernetes"
+    state.observations.extra["observation_provider"] = "KubernetesObservationProvider"
+    req = EvidenceRequest(
+        request_id="er-live",
+        type="metric",
+        query="container_memory_usage_bytes",
+        target="payment-service",
+    )
+    result = SyntheticMetricsProvider().execute_evidence_request(req, state=state)
+    assert result.success
+    assert result.data.get("unavailable") is True
+    assert "900Mi" not in result.summary
+    assert "Prometheus not configured" in result.summary
 
 
 def test_collected_evidence_feeds_verification() -> None:

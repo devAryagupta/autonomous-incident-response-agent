@@ -17,7 +17,9 @@ class ContractBase(BaseModel):
     """
 
     model_config = ConfigDict(extra="forbid", populate_by_name=True, validate_assignment=True)
-
+    # extra="forbid" means that extra fields are not allowed in the contract.
+    # populate_by_name=True means that the contract will be populated by the name of the field. used when the data is comming from the external source.
+    # validate_assignment=True means that the contract will be validated when the field is assigned or modified.
 
 class Alert(ContractBase):
     schema_version: SchemaVersion = "1"
@@ -42,23 +44,61 @@ class Evidence(ContractBase):
 
 
 class Diagnosis(ContractBase):
+    """Coarse incident scope — not a posterior over root causes.
+
+    Diagnosis runs once to lock the category (OOMKilled vs config vs app).
+    Replanning chooses among causes *inside* that scope; it does not re-diagnose.
+    If later evidence drops the frozen family's signals and supports another
+    family, ``scope_valid`` is set false and the run escalates.
+
+    ``confidence`` is heuristic certainty of the *label*, not P(cause).
+    See docs/SCORE_SEMANTICS.md.
+    """
+
     schema_version: SchemaVersion = "1"
     summary: str
-    category: str = "Unknown"
-    confidence: float = Field(ge=0.0, le=1.0)
+    category: str = "Unknown"  # Unknown is the default category for the diagnosis.
+    confidence: float = Field(
+        ge=0.0,
+        le=1.0,
+        description="Heuristic certainty of the diagnosis category, not P(cause).",
+    )
     evidence: list[Evidence] = Field(default_factory=list)
+    scope_valid: bool = True
+    scope_invalid_reason: str = ""
 
 
 class Hypothesis(ContractBase):
+    """Ranked root-cause candidate.
+
+    ``likelihood`` is current *belief* that this cause is true: a normalized
+    prior after ``hypothesize``, and a posterior after ``verify_hypotheses``.
+    The field name is historical — it is not statistical likelihood P(E|H),
+    and it is not a remediation success probability.
+    See docs/SCORE_SEMANTICS.md.
+    """
+
     schema_version: SchemaVersion = "1"
     hypothesis_id: str
     description: str
-    likelihood: float = Field(ge=0.0, le=1.0)
+    likelihood: float = Field(
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Current belief that this hypothesis is the cause. "
+            "Prior after hypothesize(); posterior after verify_hypotheses()."
+        ),
+    )
     evidence: list[Evidence] = Field(default_factory=list)
     # SRE checks the verification engine challenges against observations.
     verification_checks: list[str] = Field(default_factory=list)
     # Bridge to the Stage-0 remediation catalog cause string (planner match key).
     remediation_key: str | None = None
+
+    @property
+    def belief(self) -> float:
+        """Current belief (same stored value as ``likelihood``)."""
+        return self.likelihood
 
 
 VerificationResult = Literal["confirmed", "contradicted", "inconclusive"]
@@ -80,7 +120,7 @@ class HypothesisVerification(ContractBase):
     expected_evidence: list[str] = Field(default_factory=list)
     observed_evidence: list[str] = Field(default_factory=list)
     result: VerificationResult = "inconclusive"
-    # Posterior − prior for this hypothesis before cross-hypothesis renormalization.
+    # Belief change (posterior − prior) before cross-hypothesis renormalization.
     confidence_delta: float = 0.0
 
 
@@ -115,6 +155,7 @@ class EvidenceResult(ContractBase):
 class FixActionType(StrEnum):
     RESTART_POD = "restart_pod"
     ROLLBACK_DEPLOYMENT = "rollback_deployment"
+    ROLLOUT_RESTART = "rollout_restart"
     SCALE_DEPLOYMENT = "scale_deployment"
     PATCH_CONFIG = "patch_config"
     PATCH_RESOURCE = "patch_resource"
@@ -135,11 +176,32 @@ class RiskLevel(StrEnum):
     HIGH = "high"
 
 
+class RemediationPurpose(StrEnum):
+    """What this action is for this cause — not how likely it is to work.
+
+    root_cause: potential root-cause remediation
+    mitigation: symptom control; not a root-cause fix
+    temporary_recovery: service may come back; cause is unchanged
+    investigate: no automated change
+    """
+
+    ROOT_CAUSE = "root_cause"
+    MITIGATION = "mitigation"
+    TEMPORARY_RECOVERY = "temporary_recovery"
+    INVESTIGATE = "investigate"
+
+
 ImpactLevel = Literal["low", "medium", "high"]
 
 
 class RemediationOption(ContractBase):
-    """Candidate safe action (decision only — not executed yet)."""
+    """Candidate safe action (decision only — not executed yet).
+
+    ``confidence`` is heuristic *suitability* (catalog weight × hypothesis
+    belief), not a probability that the action will succeed.
+    ``purpose`` is mitigation vs root-cause vs temporary recovery for this cause.
+    ``safety_score`` is a separate ranking heuristic. See docs/SCORE_SEMANTICS.md.
+    """
 
     schema_version: SchemaVersion = "1"
     option_id: str
@@ -152,11 +214,26 @@ class RemediationOption(ContractBase):
     reversibility: ImpactLevel = "medium"
     # Whether a clean automated recovery path exists.
     rollback_possible: bool = True
-    confidence: float = Field(ge=0.0, le=1.0, default=0.5)
-    # Composite safety score used for ranking (higher = safer/better).
+    confidence: float = Field(
+        ge=0.0,
+        le=1.0,
+        default=0.5,
+        description=(
+            "Heuristic suitability of this action for the hypothesized cause "
+            "(catalog weight × belief). Not P(action succeeds)."
+        ),
+    )
+    # Composite safety rank used among suitable options (higher = safer/better).
     safety_score: float = Field(ge=0.0, le=1.0, default=0.0)
     hypothesis_id: str | None = None
     rationale: str = ""
+    # Default investigate so hand-built options cannot claim a root-cause fix.
+    purpose: RemediationPurpose = RemediationPurpose.INVESTIGATE
+
+    @property
+    def suitability(self) -> float:
+        """Heuristic action suitability (same stored value as ``confidence``)."""
+        return self.confidence
 
 
 class FixPlan(ContractBase):
@@ -192,6 +269,12 @@ class ValidationVerdict(ContractBase):
 
 
 class ConfidenceScore(ContractBase):
+    """Heuristic routing / gate score (replan vs enter execution).
+
+    Not interchangeable with hypothesis belief, remediation suitability, or a
+    calibrated P(incident resolved). See docs/SCORE_SEMANTICS.md.
+    """
+
     schema_version: SchemaVersion = "1"
     score: float = Field(ge=0.0, le=1.0)
     explanation: str = Field(validation_alias="reason")
@@ -234,8 +317,26 @@ class ExecutionResult(ContractBase):
     finished_at: datetime | None = None
 
 
+class ResolutionAssessment(ContractBase):
+    """Four outcome layers. Service recovery is not root-cause resolution.
+
+    Stage 0 fills what the run can observe; ``stable_recovery`` stays false
+    unless a non-palliative action also met an explicit stability check.
+    """
+
+    schema_version: SchemaVersion = "1"
+    execution_success: bool = False
+    service_recovered: bool = False
+    stable_recovery: bool = False
+    root_cause_verified: bool = False
+
+
 class OutcomeVerification(ContractBase):
-    """Post-execution check: command success ≠ incident resolved."""
+    """Post-execution check: command success ≠ service recovered ≠ cause fixed.
+
+    ``resolved`` is service recovery (expected health outcomes met). The
+    four-layer ``assessment`` is what memory may learn from.
+    """
 
     schema_version: SchemaVersion = "1"
     resolved: bool
@@ -244,6 +345,7 @@ class OutcomeVerification(ContractBase):
     unmet_expectations: list[str] = Field(default_factory=list)
     evidence_summaries: list[str] = Field(default_factory=list)
     reason: str = ""
+    assessment: ResolutionAssessment = Field(default_factory=ResolutionAssessment)
 
 
 class ResourceRef(ContractBase):
@@ -261,7 +363,7 @@ class ResourceRef(ContractBase):
     cluster: str | None = None
 
 
-class Observations(ContractBase):
+class   Observations(ContractBase):
     """Raw signals the agent reasons over.
 
     Deterministic baseline: only logs/events strings.
@@ -284,6 +386,7 @@ IncidentPhase = Literal[
     "validate_fix",
     "score_confidence",
     "replan",
+    "escalate",
     "prepare_execution",
     "pre_execute_validate",
     "approve",
@@ -310,6 +413,9 @@ class IncidentState(ContractBase):
     thread_id: str | None = None
     phase: IncidentPhase = "ingest"
     route: str | None = None
+    # Terminal hold: NOOP + INSUFFICIENT_CONFIDENCE or DIAGNOSIS_SCOPE_INVALID.
+    decision: str | None = None
+    decision_reason: str | None = None
 
     # impacted resource (optional in deterministic baselines)
     resource: ResourceRef | None = None
@@ -328,7 +434,9 @@ class IncidentState(ContractBase):
     fix_plan: FixPlan | None = None
     validation: list[ValidationResult] = Field(default_factory=list)
     validation_verdict: ValidationVerdict | None = None
+    # Routing / gate score object (not hypothesis belief, not P(success)).
     confidence: ConfidenceScore | None = None
+    # Denormalized copy of confidence.score for routers (same meaning).
     confidence_score: float | None = None
     # MemoryProvider output (empty under NoMemory)
     similar_incidents: list[dict[str, Any]] = Field(default_factory=list)

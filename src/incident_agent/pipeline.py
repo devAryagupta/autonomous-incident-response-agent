@@ -23,7 +23,12 @@ from incident_agent.nodes import (
 )
 from incident_agent.nodes.enrich import enrich
 from incident_agent.providers import ProviderBundle, default_providers
-from incident_agent.routing import bump_replan, finalize, route_on_confidence
+from incident_agent.routing import (
+    bump_replan,
+    escalate_insufficient_confidence,
+    finalize,
+    route_on_confidence,
+)
 
 
 def _apply(state: IncidentState, updates: dict[str, object]) -> None:
@@ -33,7 +38,7 @@ def _apply(state: IncidentState, updates: dict[str, object]) -> None:
 
 def _run_plan_validate_score(state: IncidentState, *, providers: ProviderBundle) -> None:
     state.phase = "hypothesize"
-    _apply(state, hypothesize(state))
+    _apply(state, hypothesize(state, providers=providers))
 
     state.phase = "collect_evidence"
     _apply(state, collect_evidence(state, providers=providers))
@@ -56,7 +61,7 @@ def _run_execution_lifecycle(state: IncidentState, *, providers: ProviderBundle)
     _apply(state, prepare_execution(state))
 
     state.phase = "pre_execute_validate"
-    _apply(state, pre_execute_validate(state))
+    _apply(state, pre_execute_validate(state, providers=providers))
 
     state.phase = "approve"
     _apply(state, approve(state))
@@ -83,9 +88,11 @@ def run_deterministic_lifecycle(
     stop_before_execution: bool = False,
 ) -> IncidentState:
     """
-    Execute the deterministic incident lifecycle (no LangGraph, no LLM, no live I/O).
+    Execute the deterministic incident lifecycle (no LangGraph, no live I/O).
 
     Providers are injected the same way as GRAPH (defaults = synthetic/dry-run/no-memory).
+    The optional LLM provider is advisory-only; verification and policy remain
+    deterministic authorities.
 
     When ``stop_before_execution`` is True, stop after plan / validate / confidence
     (partial eval slice — no dry-run execute or outcome verify).
@@ -112,6 +119,7 @@ def run_deterministic_lifecycle(
 
     state.phase = "diagnose"
     _apply(state, diagnose(state))
+    # Diagnosis is not inside the loop: replan returns to hypothesize only.
 
     while True:
         _run_plan_validate_score(state, providers=bundle)
@@ -119,6 +127,11 @@ def run_deterministic_lifecycle(
         if decision == "replan":
             _apply(state, bump_replan(state))
             continue
+        if decision == "escalate":
+            _apply(state, escalate_insufficient_confidence(state))
+            if not stop_before_execution:
+                _apply(state, finalize(state, providers=bundle))
+            break
         if stop_before_execution:
             state.phase = "score_confidence"
             break

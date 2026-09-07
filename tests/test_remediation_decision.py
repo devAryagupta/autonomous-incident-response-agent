@@ -76,6 +76,7 @@ def test_oom_chooses_increase_memory_over_rollback() -> None:
     decision = decide_remediation(_state_with_hyps(hyps, verifications=verifications))
     assert decision.chosen is not None
     assert decision.chosen.action == "increase_memory_limit"
+    assert decision.chosen.purpose.value == "mitigation"
     assert decision.chosen.blast_radius == "low"
     assert decision.chosen.reversibility == "high"
     assert decision.chosen.rollback_possible is True
@@ -85,6 +86,43 @@ def test_oom_chooses_increase_memory_over_rollback() -> None:
     assert any(o.action == "rollback_deployment" for o in decision.options)
     assert decision.fix_plan.actions[0].action_type == FixActionType.PATCH_RESOURCE
     assert decision.fix_plan.remediation_option_id == decision.chosen.option_id
+
+
+def test_unconfirmed_causes_plan_investigate() -> None:
+    hyps = [
+        Hypothesis(
+            hypothesis_id="h1-memory_leak",
+            description="Memory leak",
+            likelihood=0.61,
+            remediation_key="Resource Constraint (OOMKilled)",
+        ),
+        Hypothesis(
+            hypothesis_id="h2-memory_limit_too_low",
+            description="Memory limit too low",
+            likelihood=0.28,
+            remediation_key="Resource Constraint (OOMKilled)",
+        ),
+        Hypothesis(
+            hypothesis_id="h3-traffic_spike",
+            description="Traffic spike",
+            likelihood=0.11,
+            remediation_key="Resource Constraint (OOMKilled)",
+        ),
+    ]
+    verifications = [
+        HypothesisVerification(
+            hypothesis_id=hyp.hypothesis_id,
+            hypothesis=hyp.description,
+            result="inconclusive",
+            confidence_delta=0.0,
+        )
+        for hyp in hyps
+    ]
+    decision = decide_remediation(_state_with_hyps(hyps, verifications=verifications))
+    assert decision.chosen is None
+    assert decision.matched_rule == "remediation_decision.v1:unresolved_cause"
+    assert decision.fix_plan.actions[0].action_type == FixActionType.NOOP
+    assert "root cause not yet distinguishable" in (decision.fix_plan.actions[0].rationale or "")
 
 
 def test_secret_prefers_config_fix_with_low_blast_radius() -> None:
@@ -151,7 +189,7 @@ def test_low_effectiveness_restart_does_not_beat_safer_fix() -> None:
     ]
     decision = decide_remediation(_state_with_hyps(hyps, verifications=verifications))
     assert decision.chosen is not None
-    # Restart is lower blast radius but much lower confidence/effectiveness.
+    # Restart is lower blast radius but much lower suitability / expected effect.
     assert decision.chosen.action == "rollback_deployment"
     assert decision.fix_plan.actions[0].action_type == FixActionType.ROLLBACK_DEPLOYMENT
 
@@ -222,3 +260,51 @@ def test_blocks_when_no_option_meets_effectiveness_floor() -> None:
     assert decision.fix_plan.actions[0].params["action"] == "noop_investigate"
     assert decision.fix_plan.notes is not None
     assert "effectiveness floor" in decision.fix_plan.notes
+
+
+def test_option_confidence_ignores_verification_verdict() -> None:
+    """Posterior belief already encodes verification; verdict must not apply again."""
+    hyps = [
+        Hypothesis(
+            hypothesis_id="h1-memory_leak",
+            description="Memory leak",
+            likelihood=0.70,
+            remediation_key="Resource Constraint (OOMKilled)",
+        )
+    ]
+    confirmed = [
+        HypothesisVerification(
+            hypothesis_id="h1-memory_leak",
+            hypothesis="Memory leak",
+            result="confirmed",
+            confidence_delta=0.2,
+        )
+    ]
+    with_verdict = decide_remediation(_state_with_hyps(hyps, verifications=confirmed))
+    without_verdict = decide_remediation(_state_with_hyps(hyps))
+    assert with_verdict.chosen is not None
+    assert without_verdict.chosen is not None
+    assert with_verdict.chosen.action == without_verdict.chosen.action
+    assert with_verdict.chosen.confidence == without_verdict.chosen.confidence
+    # increase_memory_limit catalog suitability 0.85 × belief 0.70
+    assert with_verdict.chosen.suitability == 0.595
+
+
+def test_increase_memory_limit_plan_keeps_explicit_target_quantity() -> None:
+    hyps = [
+        Hypothesis(
+            hypothesis_id="h1-memory_limit_too_low",
+            description="Memory limit too low",
+            likelihood=0.90,
+            remediation_key="Resource Constraint (OOMKilled)",
+        )
+    ]
+    state = _state_with_hyps(hyps)
+    state.observations.extra["new_memory_limit"] = "2Gi"
+    decision = decide_remediation(state)
+    assert decision.chosen is not None
+    assert decision.chosen.action == "increase_memory_limit"
+    params = decision.fix_plan.actions[0].params
+    assert params.get("new_memory_limit") == "2Gi"
+    assert params.get("memory_limit") == "2Gi"
+    assert "512Mi" not in str(params)

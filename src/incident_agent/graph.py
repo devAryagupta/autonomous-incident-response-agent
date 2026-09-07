@@ -21,7 +21,12 @@ from incident_agent.nodes import (
 )
 from incident_agent.nodes.enrich import enrich
 from incident_agent.providers import PROVIDERS_CONFIG_KEY, ProviderBundle, default_providers
-from incident_agent.routing import bump_replan, finalize, route_on_confidence
+from incident_agent.routing import (
+    bump_replan,
+    escalate_insufficient_confidence,
+    finalize,
+    route_on_confidence,
+)
 
 try:
     from langgraph.graph import END, START, StateGraph
@@ -30,6 +35,12 @@ except Exception as e:  # pragma: no cover
         "LangGraph is not installed. Install with `pip install langgraph` "
         "or `pip install .[agent]`."
     ) from e
+
+
+# LangGraph 1.2 injects config only when the parameter is annotated as
+# RunnableConfig (or Optional[RunnableConfig]). Do not write
+# `RunnableConfig | None` here — that string is ignored and providers
+# fall back to synthetic defaults.
 
 
 def _config_from_runnable(config: RunnableConfig | None) -> dict[str, Any] | None:
@@ -48,7 +59,7 @@ def _with_phase(*, phase: str, fn):
 
     def _wrapped(
         state: IncidentState,
-        config: RunnableConfig | None = None,
+        config: RunnableConfig = None,
     ) -> dict[str, object]:
         _ = config
         updates = dict(fn(state))
@@ -60,23 +71,32 @@ def _with_phase(*, phase: str, fn):
 
 def _enrich_node(
     state: IncidentState,
-    config: RunnableConfig | None = None,
+    config: RunnableConfig = None,
 ) -> dict[str, object]:
     return enrich(state, config=_config_from_runnable(config))
 
 
 def _collect_evidence_node(
     state: IncidentState,
-    config: RunnableConfig | None = None,
+    config: RunnableConfig = None,
 ) -> dict[str, object]:
     updates = dict(collect_evidence(state, config=_config_from_runnable(config)))
     updates["phase"] = "collect_evidence"
     return updates
 
 
+def _hypothesize_node(
+    state: IncidentState,
+    config: RunnableConfig = None,
+) -> dict[str, object]:
+    updates = dict(hypothesize(state, config=_config_from_runnable(config)))
+    updates["phase"] = "hypothesize"
+    return updates
+
+
 def _confidence_node(
     state: IncidentState,
-    config: RunnableConfig | None = None,
+    config: RunnableConfig = None,
 ) -> dict[str, object]:
     _ = config
     updates = dict(compute_confidence(state))
@@ -84,9 +104,18 @@ def _confidence_node(
     return updates
 
 
+def _pre_execute_validate_node(
+    state: IncidentState,
+    config: RunnableConfig = None,
+) -> dict[str, object]:
+    updates = dict(pre_execute_validate(state, config=_config_from_runnable(config)))
+    updates["phase"] = "pre_execute_validate"
+    return updates
+
+
 def _execute_node(
     state: IncidentState,
-    config: RunnableConfig | None = None,
+    config: RunnableConfig = None,
 ) -> dict[str, object]:
     updates = dict(execute_fix(state, config=_config_from_runnable(config)))
     updates["phase"] = "execute"
@@ -95,7 +124,7 @@ def _execute_node(
 
 def _verify_outcome_node(
     state: IncidentState,
-    config: RunnableConfig | None = None,
+    config: RunnableConfig = None,
 ) -> dict[str, object]:
     updates = dict(verify_outcome(state, config=_config_from_runnable(config)))
     updates["phase"] = "verify_outcome"
@@ -104,7 +133,7 @@ def _verify_outcome_node(
 
 def _finalize_node(
     state: IncidentState,
-    config: RunnableConfig | None = None,
+    config: RunnableConfig = None,
 ) -> dict[str, object]:
     return finalize(state, config=_config_from_runnable(config))
 
@@ -115,9 +144,12 @@ def build_graph():
 
     START -> enrich -> diagnose -> hypothesize -> collect_evidence
           -> verify_hypotheses -> plan_fix -> validate_fix -> confidence
-      ├── low confidence & retries → replan → hypothesize ↺
-      └── else → prepare_execution → pre_execute_validate → approve
-               → execute → verify_outcome → finalize → END
+      ├── diagnosis scope contradicted → escalate (NOOP) → finalize
+      ├── high confidence → prepare_execution → … → execute → finalize
+      ├── low confidence & retries → replan → hypothesize ↺ (not diagnose)
+      └── still low after max replans → escalate (NOOP) → finalize
+
+    Diagnosis runs once to lock incident scope. Replan stays inside that scope.
 
     Providers are injected via:
       invoke(state, config={"configurable": {"providers": ProviderBundle(...)}})
@@ -126,7 +158,7 @@ def build_graph():
 
     g.add_node("enrich", _enrich_node)
     g.add_node("diagnose", _with_phase(phase="diagnose", fn=diagnose))
-    g.add_node("hypothesize", _with_phase(phase="hypothesize", fn=hypothesize))
+    g.add_node("hypothesize", _hypothesize_node)
     g.add_node("collect_evidence", _collect_evidence_node)
     g.add_node(
         "verify_hypotheses",
@@ -136,14 +168,12 @@ def build_graph():
     g.add_node("validate_fix", _with_phase(phase="validate_fix", fn=validate_fix))
     g.add_node("confidence", _confidence_node)
     g.add_node("replan", bump_replan)
+    g.add_node("escalate", _with_phase(phase="escalate", fn=escalate_insufficient_confidence))
     g.add_node(
         "prepare_execution",
         _with_phase(phase="prepare_execution", fn=prepare_execution),
     )
-    g.add_node(
-        "pre_execute_validate",
-        _with_phase(phase="pre_execute_validate", fn=pre_execute_validate),
-    )
+    g.add_node("pre_execute_validate", _pre_execute_validate_node)
     g.add_node("approve", _with_phase(phase="approve", fn=approve))
     g.add_node("execute", _execute_node)
     g.add_node("verify_outcome", _verify_outcome_node)
@@ -162,11 +192,13 @@ def build_graph():
         "confidence",
         route_on_confidence,
         {
-            "end": "prepare_execution",
+            "execute": "prepare_execution",
             "replan": "replan",
+            "escalate": "escalate",
         },
     )
     g.add_edge("replan", "hypothesize")
+    g.add_edge("escalate", "finalize")
     g.add_edge("prepare_execution", "pre_execute_validate")
     g.add_edge("pre_execute_validate", "approve")
     g.add_edge("approve", "execute")

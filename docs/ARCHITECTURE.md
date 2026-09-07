@@ -8,8 +8,14 @@ This document explains **how the agent is structured** and **how one incident fl
 
 1. **Deterministic core** — Stage-0 reasoning paths run without LLMs, API keys, or a cluster  
 2. **Provider isolation** — Observation / Metrics / Execution / Memory swap without rewriting business nodes  
-3. **Safety before autonomy** — calibrated confidence × risk policy gates every mutation  
+3. **Safety before autonomy** — a routing / gate score × risk policy gates every mutation  
 4. **Eval-native** — synthetic incidents + decision traces + multi-dimensional scorecards  
+
+Numbers in `[0, 1]` are not one probability. Hypothesis values are **belief** after
+evidence updates; remediation scores are **heuristic suitability**, not `P(success)`.
+See [SCORE_SEMANTICS.md](SCORE_SEMANTICS.md). Two belief-update
+implementations exist; only the live stack is on the graph —
+[VERIFICATION_STACKS.md](VERIFICATION_STACKS.md).
 
 ---
 
@@ -17,20 +23,21 @@ This document explains **how the agent is structured** and **how one incident fl
 
 ```mermaid
 flowchart LR
-  subgraph future ["Future"]
+  subgraph later ["Later"]
     P[prompts/]
-    L[llm/]
     T[tools/]
   end
 
   subgraph today ["Stage 0"]
+    L[llm/]
     ORCH[orchestration]
     BIZ[business]
     CON[contracts]
     PROV[providers]
   end
 
-  P --> L --> ORCH
+  P --> L
+  L --> ORCH
   ORCH --> BIZ --> CON
   ORCH <--> PROV
   T --> PROV
@@ -61,8 +68,12 @@ Nodes and the graph depend on **protocols**, not concrete backends.
 | `MetricsProvider` | Synthetic / stub | `PrometheusMetricsProvider` |
 | `ExecutionProvider` | Dry-run | `KubectlExecutionProvider` (allowlisted) |
 | `MemoryProvider` | No-op / local episode store | Extensible (e.g. vector store later) |
+| `LLMSuggestionProvider` | No-op | OpenAI-compatible / OpenRouter (`from_env()`) |
 
 Inject via `ProviderBundle` on `GRAPH.invoke(...)`. Business nodes read `Observations` and write partial state updates — they do not know whether logs came from JSONL or the API server.
+
+The LLM provider is advisory only. Ingestion rejects control-plane output.
+Routing and execution stay in deterministic code. See [LLM_BOUNDARY.md](LLM_BOUNDARY.md).
 
 ---
 
@@ -81,9 +92,11 @@ flowchart TD
   plan_fix --> validate_fix
   validate_fix --> confidence
 
-  confidence -->|end| prepare_execution
+  confidence -->|execute| prepare_execution
   confidence -->|replan| replan
+  confidence -->|escalate| escalate
   replan --> hypothesize
+  escalate --> finalize
 
   prepare_execution --> pre_execute_validate
   pre_execute_validate --> approve
@@ -98,25 +111,42 @@ flowchart TD
 | Phase | Intent |
 |-------|--------|
 | `enrich` | Attach provider-backed context to state |
-| `diagnose` | Symptom / category framing from observations |
-| `hypothesize` | Ranked root-cause candidates |
-| `collect_evidence` | Planned telemetry pulls |
-| `verify_hypotheses` | Bayesian / spec-driven confirmation |
-| `plan_fix` | Remediation plan from confirmed hypothesis |
+| `diagnose` | One-shot **scope** classification (OOM / config / app). Not re-run on replan |
+| `hypothesize` | Competing causes **inside that scope**, with normalized **prior belief**. May merge accepted LLM hypothesis candidates (0.05 prior), then renormalize |
+| `collect_evidence` | Planned telemetry pulls, plus accepted LLM evidence requests that pass ingestion |
+| `verify_hypotheses` | Live-stack posterior belief (`verification/engine.py`). Not the OOM metric loop |
+| `plan_fix` | Rank actions by heuristic suitability + safety |
 | `validate_fix` | Structural / policy checks on the plan |
-| `confidence` | Score (+ calibration signals) |
-| `replan` | Increment counter; loop to hypothesize |
+| `pre_execute_validate` | Execution preconditions. DryRun infers target presence from state; kubectl provider GETs the resource |
+| `confidence` | Routing / gate score (execute vs replan vs escalate) — not `P(success)` |
+| `replan` | Increment counter; loop to **hypothesize**, never back to diagnose |
+| `escalate` | Invalid diagnosis scope, or still low after max replans → NOOP / investigation; no mutation |
 | `prepare_execution` … `execute` | Gate + allowlisted mutation (often dry-run) |
-| `verify_outcome` | Did the world improve? |
+| `verify_outcome` | Four-layer outcome: command / service recovery / stability / root cause. Synthetic = regex evidence; Kubernetes = pod phase / ready / restarts / CrashLoopBackOff |
 | `finalize` | Terminal state + memory episode |
 
 ### Confidence routing
 
+The `confidence` node writes a **routing / gate score** (`ConfidenceScore` /
+`IncidentState.confidence_score`). It is `top_belief × validation_pass` — not a
+calibrated probability that the incident will resolve.
+
+Diagnosis is performed **once** to establish incident scope. Replanning
+operates within that scope — it re-ranks causes and plans, it does not
+rebuild the category. There is no dynamic diagnostic graph.
+
+Exception: if later evidence **no longer supports** the frozen family and
+**does support** a different family, diagnosis is marked `scope_valid=false`
+and the run escalates (`decision=NOOP`, `reason=DIAGNOSIS_SCOPE_INVALID`).
+Mixed signals (original family still present) stay in the original scope.
+
 From `routing.py` (defaults):
 
+- Diagnosis scope contradicted → escalate (do not replan inside the wrong catalog)  
 - Score ≥ threshold (default **0.7**) → enter execution lifecycle  
 - Score low and `replan_count < max_replans` → replan  
-- Retries exhausted → still enter execution lifecycle; prepare/approve may **skip** unsafe actions  
+- Still low after max replans → **NOOP** (`decision=NOOP`,
+  `reason=INSUFFICIENT_CONFIDENCE`); execution is skipped
 
 ### Execution safety
 
@@ -129,7 +159,10 @@ From `routing.py` (defaults):
 | HIGH | 0.95 |
 | CRITICAL | 0.99 |
 
-Allowlisted kubectl actions today: `restart_pod`, `rollout_restart`, `scale_deployment`, `update_resource_limit`. No free-form shell.
+Allowlisted kubectl actions today: `restart_pod`, `rollback_deployment`,
+`rollout_restart`, `scale_deployment`, `update_resource_limit`. These are
+distinct operations — `rollback_deployment` is `rollout undo`, not a restart.
+No free-form shell.
 
 ---
 
@@ -141,6 +174,24 @@ Allowlisted kubectl actions today: `restart_pod`, `rollout_restart`, `scale_depl
 | Deterministic pipeline | `run_deterministic_lifecycle(...)` | Fast tests / debugging |
 
 Parity tests should keep them aligned where both exist.
+
+---
+
+## Two Bayesian stacks (do not merge)
+
+The word “Bayesian” appears twice. They are different programs.
+
+| Stack | Runs on the incident graph? | Types |
+|-------|-----------------------------|--------|
+| **Live belief update** — `verification/engine.py` | Yes (`verify_hypotheses`) | `contracts.Hypothesis` |
+| **OOM metric walkthrough** — `verification/loop.py` | No | `HypothesisState` |
+
+The live stack uses regex specs and hand-set Bayes-factor **buckets**. The
+loop uses a hand-set `P(E|H)` matrix for one evidence class (continuous
+memory growth). Neither is a fitted or calibrated model of `P(cause)`.
+
+Full roles and limits: [VERIFICATION_STACKS.md](VERIFICATION_STACKS.md).
+Numbers: [SCORE_SEMANTICS.md](SCORE_SEMANTICS.md).
 
 ---
 
@@ -168,6 +219,8 @@ Never write agent dumps under `src/`. See [runtime/README.md](../runtime/README.
 5. Recovery time (MTTR proxy)  
 
 Dataset-layer eval (`datasets/eval.py`) remains available for prediction JSONL vs ground truth. Prefer extending pure functions in `eval/` when improving autonomy metrics.
+
+LLM-assisted golden runs (`eval/compare_llm.py`) reuse the same 9-case freeze and add suggestion metrics: generated / accepted / rejected / useful evidence / unsafe. Diagnosis accuracy is not an LLM score — the model does not own diagnosis. See [baselines/README.md](baselines/README.md).
 
 ---
 

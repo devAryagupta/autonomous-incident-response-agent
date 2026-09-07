@@ -8,11 +8,26 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from incident_agent.contracts import ResolutionAssessment
+
 
 class EpisodeOutcome(StrEnum):
+    """Coarse label derived from ResolutionAssessment.
+
+    SUCCESS means root cause verified — not merely that the service recovered.
+    """
+
     SUCCESS = "SUCCESS"
     FAILURE = "FAILURE"
     PARTIAL = "PARTIAL"
+
+
+def outcome_from_assessment(assessment: ResolutionAssessment) -> EpisodeOutcome:
+    if assessment.root_cause_verified:
+        return EpisodeOutcome.SUCCESS
+    if assessment.service_recovered or assessment.execution_success:
+        return EpisodeOutcome.PARTIAL
+    return EpisodeOutcome.FAILURE
 
 
 class IncidentEpisode(BaseModel):
@@ -27,6 +42,7 @@ class IncidentEpisode(BaseModel):
     confirmed_hypothesis: str = ""
     remediation_action: str = ""
     outcome: EpisodeOutcome = EpisodeOutcome.FAILURE
+    assessment: ResolutionAssessment = Field(default_factory=ResolutionAssessment)
     evidence: dict[str, Any] = Field(default_factory=dict)
     timestamp: datetime
 

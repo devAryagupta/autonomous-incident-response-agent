@@ -9,6 +9,7 @@ from incident_agent.contracts import (
     Evidence,
     IncidentState,
     Observations,
+    ResolutionAssessment,
 )
 from incident_agent.memory import (
     EpisodeOutcome,
@@ -25,6 +26,24 @@ from incident_agent.providers import LocalIncidentMemoryProvider, learning_provi
 from incident_agent.hypothesis.candidates import OOM_CANDIDATES
 
 
+def _assessment_for(outcome: EpisodeOutcome) -> ResolutionAssessment:
+    if outcome == EpisodeOutcome.SUCCESS:
+        return ResolutionAssessment(
+            execution_success=True,
+            service_recovered=True,
+            stable_recovery=True,
+            root_cause_verified=True,
+        )
+    if outcome == EpisodeOutcome.PARTIAL:
+        return ResolutionAssessment(
+            execution_success=True,
+            service_recovered=True,
+            stable_recovery=False,
+            root_cause_verified=False,
+        )
+    return ResolutionAssessment()
+
+
 def _episode(
     *,
     incident_id: str,
@@ -33,7 +52,9 @@ def _episode(
     confirmed: str = "Memory limit too low",
     action: str = "increase_memory_limit",
     outcome: EpisodeOutcome = EpisodeOutcome.SUCCESS,
+    assessment: ResolutionAssessment | None = None,
 ) -> IncidentEpisode:
+    flags = assessment if assessment is not None else _assessment_for(outcome)
     return IncidentEpisode(
         episode_id=f"ep-{incident_id}",
         incident_id=incident_id,
@@ -42,6 +63,7 @@ def _episode(
         confirmed_hypothesis=confirmed,
         remediation_action=action,
         outcome=outcome,
+        assessment=flags,
         evidence={"note": "synthetic history"},
         timestamp=datetime.now(tz=UTC),
     )
@@ -282,7 +304,11 @@ def test_episode_from_state_captures_resolution() -> None:
     assert episode.diagnosis == "OOMKilled"
     assert episode.confirmed_hypothesis == "Memory leak"
     assert episode.remediation_action == "increase_memory_limit"
-    assert episode.outcome == EpisodeOutcome.SUCCESS
+    # Raising the limit recovered the service; it did not verify the leak.
+    assert episode.assessment.execution_success is True
+    assert episode.assessment.service_recovered is True
+    assert episode.assessment.root_cause_verified is False
+    assert episode.outcome == EpisodeOutcome.PARTIAL
     assert "OOMKilled" in episode.symptoms or "Exit 137" in episode.symptoms
 
 
@@ -308,3 +334,86 @@ def test_failed_episodes_filtered_by_default() -> None:
     )
     assert all(r.episode.outcome != EpisodeOutcome.FAILURE for r in results)
     assert results[0].episode.incident_id == "ok-1"
+
+
+def test_restart_after_leak_is_recovery_not_root_cause() -> None:
+    from incident_agent.contracts import ExecutionResult, Hypothesis, HypothesisVerification
+
+    state = IncidentState(
+        incident_id="INC-leak-restart",
+        created_at=datetime.now(tz=UTC),
+        alert=Alert(
+            alert_name="CrashLoopBackOff",
+            severity="critical",
+            starts_at=datetime.now(tz=UTC),
+        ),
+        observations=Observations(logs=["exit code 137"], events=["OOMKilled"]),
+        diagnosis=Diagnosis(category="OOMKilled", summary="OOMKilled", confidence=0.9),
+        hypotheses=[
+            Hypothesis(
+                hypothesis_id="h1-memory_leak",
+                description="Memory leak",
+                likelihood=0.8,
+            )
+        ],
+        hypothesis_verifications=[
+            HypothesisVerification(
+                hypothesis_id="h1-memory_leak",
+                hypothesis="Memory leak",
+                result="confirmed",
+            )
+        ],
+        execution=ExecutionResult(
+            executed=True,
+            success=True,
+            status="success",
+            action="restart_pod",
+            applied_changes=["pod deleted/recreated"],
+            summary="pod running",
+        ),
+        incident_resolved=True,
+    )
+    episode = episode_from_state(state)
+    assert episode is not None
+    assert episode.assessment.execution_success is True
+    assert episode.assessment.service_recovered is True
+    assert episode.assessment.stable_recovery is False
+    assert episode.assessment.root_cause_verified is False
+    assert episode.outcome == EpisodeOutcome.PARTIAL
+
+
+def test_palliative_restart_history_does_not_boost_leak_prior() -> None:
+    store = InMemoryMemoryStore()
+    recovered = ResolutionAssessment(
+        execution_success=True,
+        service_recovered=True,
+        stable_recovery=False,
+        root_cause_verified=False,
+    )
+    for i in range(12):
+        store.save(
+            _episode(
+                incident_id=f"leak-restart-{i}",
+                symptoms=["CrashLoopBackOff", "OOMKilled", "Exit 137"],
+                confirmed="Memory leak",
+                action="restart_pod",
+                outcome=EpisodeOutcome.PARTIAL,
+                assessment=recovered,
+            )
+        )
+    retriever = MemoryRetriever(store)
+    similar = [
+        r.model_dump(mode="json")
+        for r in retriever.retrieve_similar(
+            ["CrashLoopBackOff", "OOMKilled"],
+            top_k=10,
+            include_failures=False,
+        )
+    ]
+    assert similar
+    boosts = prior_adjustments_from_memory(
+        candidate_slugs=[c.slug for c in OOM_CANDIDATES],
+        similar_incidents=similar,
+    )
+    assert boosts.get("memory_leak", 0.0) == 0.0
+    assert "memory_leak" not in boosts

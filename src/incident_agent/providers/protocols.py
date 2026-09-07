@@ -56,10 +56,14 @@ class MetricsProvider(Protocol):
 
 @runtime_checkable
 class ExecutionProvider(Protocol):
-    """Applies a FixPlan (or dry-runs it). Never called with live I/O in Stage 0."""
+    """Applies a FixPlan (or dry-runs it). Mutations stay off the Stage-0 path."""
 
     def execute(self, plan: FixPlan, *, state: IncidentState) -> ExecutionResult:
         """Execute (or simulate) the plan and return an ExecutionResult."""
+        ...
+
+    def resource_exists(self, kind: str, namespace: str, name: str) -> bool:
+        """Confirm a mutation target exists (GET). Dry-run may infer from the name."""
         ...
 
 

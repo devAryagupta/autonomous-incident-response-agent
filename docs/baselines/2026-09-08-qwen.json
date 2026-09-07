@@ -1,0 +1,157 @@
+{
+  "schema_version": "1",
+  "label": "2026-09-08-qwen",
+  "created_at": "2026-09-07T19:01:31.298035Z",
+  "baseline_label": "2026-09-07",
+  "baseline_manifest": "docs\\baselines\\2026-09-07.json",
+  "deterministic": {
+    "incidents": 9,
+    "diagnosis_correct": 9,
+    "diagnosis_accuracy": 1.0,
+    "top_hypothesis_correct": 7,
+    "top_hypothesis_accuracy": 0.7777777777777778,
+    "fix_correct": 5,
+    "fix_accuracy": 0.5555555555555556,
+    "insufficient_evidence": 4,
+    "failure_histogram": {
+      "INSUFFICIENT EVIDENCE": 4
+    }
+  },
+  "llm_assisted": {
+    "incidents": 9,
+    "diagnosis_correct": 9,
+    "diagnosis_accuracy": 1.0,
+    "top_hypothesis_correct": 7,
+    "top_hypothesis_accuracy": 0.7777777777777778,
+    "fix_correct": 2,
+    "fix_accuracy": 0.2222222222222222,
+    "insufficient_evidence": 7,
+    "failure_histogram": {
+      "INSUFFICIENT EVIDENCE": 7
+    },
+    "llm_metrics": {
+      "suggestions_generated": 128,
+      "suggestions_accepted": 81,
+      "suggestions_rejected": 47,
+      "useful_evidence_requests": 12,
+      "unsafe_control_suggestions": 2,
+      "unsafe_accepted": 0,
+      "acceptance_rate": 0.6328,
+      "provider": "openrouter",
+      "model": "qwen/qwen-2.5-7b-instruct"
+    },
+    "artifacts": {
+      "run_json": "artifacts\\baselines\\2026-09-08-qwen\\golden_llm_run.json",
+      "run_csv": "artifacts\\baselines\\2026-09-08-qwen\\golden_llm_run.csv",
+      "trace_json": "artifacts\\baselines\\2026-09-08-qwen\\golden_llm_trace.json"
+    }
+  },
+  "incidents": [
+    {
+      "incident_id": "cl-oom-memory-leak-001",
+      "diagnosis_correct": true,
+      "top_hypothesis_correct": true,
+      "fix_correct": true,
+      "failure_category": null,
+      "llm_generated": 4,
+      "llm_accepted": 3,
+      "llm_rejected": 1,
+      "useful_evidence_requests": 0
+    },
+    {
+      "incident_id": "cl-oom-memory-limit-low-002",
+      "diagnosis_correct": true,
+      "top_hypothesis_correct": false,
+      "fix_correct": false,
+      "failure_category": "INSUFFICIENT EVIDENCE",
+      "llm_generated": 12,
+      "llm_accepted": 5,
+      "llm_rejected": 7,
+      "useful_evidence_requests": 0
+    },
+    {
+      "incident_id": "cl-oom-traffic-spike-003",
+      "diagnosis_correct": true,
+      "top_hypothesis_correct": true,
+      "fix_correct": false,
+      "failure_category": "INSUFFICIENT EVIDENCE",
+      "llm_generated": 18,
+      "llm_accepted": 10,
+      "llm_rejected": 8,
+      "useful_evidence_requests": 0
+    },
+    {
+      "incident_id": "cl-config-missing-env-004",
+      "diagnosis_correct": true,
+      "top_hypothesis_correct": true,
+      "fix_correct": false,
+      "failure_category": "INSUFFICIENT EVIDENCE",
+      "llm_generated": 18,
+      "llm_accepted": 15,
+      "llm_rejected": 3,
+      "useful_evidence_requests": 3
+    },
+    {
+      "incident_id": "cl-config-malformed-005",
+      "diagnosis_correct": true,
+      "top_hypothesis_correct": true,
+      "fix_correct": true,
+      "failure_category": null,
+      "llm_generated": 4,
+      "llm_accepted": 4,
+      "llm_rejected": 0,
+      "useful_evidence_requests": 1
+    },
+    {
+      "incident_id": "cl-config-missing-secret-006",
+      "diagnosis_correct": true,
+      "top_hypothesis_correct": true,
+      "fix_correct": false,
+      "failure_category": "INSUFFICIENT EVIDENCE",
+      "llm_generated": 18,
+      "llm_accepted": 9,
+      "llm_rejected": 9,
+      "useful_evidence_requests": 0
+    },
+    {
+      "incident_id": "cl-app-unhandled-exception-007",
+      "diagnosis_correct": true,
+      "top_hypothesis_correct": false,
+      "fix_correct": false,
+      "failure_category": "INSUFFICIENT EVIDENCE",
+      "llm_generated": 18,
+      "llm_accepted": 11,
+      "llm_rejected": 7,
+      "useful_evidence_requests": 2
+    },
+    {
+      "incident_id": "cl-app-startup-failure-008",
+      "diagnosis_correct": true,
+      "top_hypothesis_correct": true,
+      "fix_correct": false,
+      "failure_category": "INSUFFICIENT EVIDENCE",
+      "llm_generated": 18,
+      "llm_accepted": 12,
+      "llm_rejected": 6,
+      "useful_evidence_requests": 3
+    },
+    {
+      "incident_id": "cl-app-bad-logic-009",
+      "diagnosis_correct": true,
+      "top_hypothesis_correct": true,
+      "fix_correct": false,
+      "failure_category": "INSUFFICIENT EVIDENCE",
+      "llm_generated": 18,
+      "llm_accepted": 12,
+      "llm_rejected": 6,
+      "useful_evidence_requests": 3
+    }
+  ],
+  "interpretation": "Diagnosis stayed 9/9 (expected: the model does not own diagnosis). Top hypothesis stayed 7/9. Fix accuracy fell from 5/9 to 2/9 because three near-threshold executes (006, 007, 009) dropped below the 0.7 gate after advisory hypotheses were merged and renormalized. The planner still proposed the same remediations; the gate refused to commit. LLM acceptance was 81/128 (63%) with 12 useful evidence requests and 0 unsafe accepted.",
+  "provenance": {
+    "dataset_path": "data/synthetic/crashloopbackoff/goldendataset/crashloop_golden_dataset.jsonl",
+    "dataset_sha256": "5d2f1007638be66373ec3c8bad8c923e4b5729dbf609ae08748c27297dcc275e",
+    "llm_provider": "openrouter",
+    "llm_model": "qwen/qwen-2.5-7b-instruct"
+  }
+}

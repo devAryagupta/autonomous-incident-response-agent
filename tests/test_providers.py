@@ -108,11 +108,15 @@ def test_enrich_uses_injected_providers() -> None:
     assert any(line.startswith("enrich:") for line in updates["log"])
 
 
+class _SpyObservations(SyntheticObservationProvider):
+    """Distinct type so GRAPH.invoke injection cannot hide behind Stage-0 defaults."""
+
+
 def test_graph_accepts_provider_injection() -> None:
     state = _state()
     state.observations.extra["confidence_threshold"] = 0.0
     custom = ProviderBundle(
-        observations=SyntheticObservationProvider(),
+        observations=_SpyObservations(),
         metrics=SyntheticMetricsProvider(),
         execution=DryRunExecutionProvider(),
         memory=NoMemoryProvider(),
@@ -121,4 +125,5 @@ def test_graph_accepts_provider_injection() -> None:
     assert out.phase == "done"
     assert out.execution is not None
     assert out.execution.details["provider"] == "dry_run"
+    assert out.observations.extra.get("observation_provider") == "_SpyObservations"
     assert out.observations.extra.get("metrics_provider") == "SyntheticMetricsProvider"

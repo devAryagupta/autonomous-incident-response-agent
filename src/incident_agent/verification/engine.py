@@ -1,4 +1,13 @@
-"""Challenge hypotheses against observations and update posteriors (Bayesian-style)."""
+"""Live graph belief update (Bayes-factor buckets on observation text).
+
+This is the only verifier on LangGraph / pipeline / golden eval.
+It reads ``contracts.Hypothesis.likelihood`` as prior belief and writes the
+renormalized posterior onto the same field.
+
+Not the standalone OOM loop (``loop.py`` + ``HypothesisState``).
+Not a fitted P(E|H) model — factors are discrete confirmed/inconclusive/
+contradicted weights. See docs/VERIFICATION_STACKS.md.
+"""
 
 from __future__ import annotations
 
@@ -12,11 +21,6 @@ from incident_agent.contracts import (
     Observations,
 )
 from incident_agent.verification.specs import VerificationSpec, spec_for
-
-_MEMORY_GROWTH_RE = re.compile(
-    r"(?:memory|rss|heap)?\s*(?:increased|grew|from)?\s*(\d+)\s*mi\b.*?\b(\d+)\s*mi\b",
-    re.IGNORECASE,
-)
 
 # Bayes factors: prior odds × factor → posterior odds (then renormalize across set).
 _BF_CONFIRMED_STRONG = 6.0
@@ -108,55 +112,15 @@ def _dedupe(values: list[str]) -> list[str]:
     return out
 
 
-def _memory_growth_observations(lines: list[str], observations: Observations) -> list[str]:
-    found: list[str] = []
-    for line in lines:
-        match = _MEMORY_GROWTH_RE.search(line)
-        if match:
-            low, high = int(match.group(1)), int(match.group(2))
-            if high > low:
-                found.append(f"Memory increased from {low}Mi to {high}Mi")
-    series = observations.extra.get("metrics", {})
-    if isinstance(series, dict):
-        mem = series.get("memory_mi") or series.get("memory") or series.get("series", {})
-        if isinstance(mem, dict):
-            start = mem.get("start") or mem.get("min")
-            end = mem.get("end") or mem.get("max") or mem.get("peak")
-            if isinstance(start, (int, float)) and isinstance(end, (int, float)) and end > start:
-                found.append(f"Memory increased from {int(start)}Mi to {int(end)}Mi")
-        elif isinstance(mem, list) and len(mem) >= 2:
-            try:
-                start_v, end_v = float(mem[0]), float(mem[-1])
-            except (TypeError, ValueError):
-                start_v = end_v = 0.0
-            if end_v > start_v:
-                found.append(f"Memory increased from {int(start_v)}Mi to {int(end_v)}Mi")
-    # Dedup
-    out: list[str] = []
-    seen: set[str] = set()
-    for item in found:
-        if item not in seen:
-            seen.add(item)
-            out.append(item)
-    return out
-
-
 def _challenge(
-    hyp: Hypothesis,
+    _hyp: Hypothesis,
     spec: VerificationSpec,
     lines: list[str],
-    observations: Observations,
+    _observations: Observations,
 ) -> _Challenge:
     support = _collect_hits(lines, spec.support_patterns)
     contradict = _collect_hits(lines, spec.contradict_patterns)
     required, required_matches = _collect_required_hits(lines, spec.required_patterns)
-
-    if hyp.description == "Memory leak":
-        growth = _memory_growth_observations(lines, observations)
-        support.extend(growth)
-        required.extend(growth)
-        if growth and spec.required_patterns:
-            required_matches = max(required_matches, 1)
 
     deduped_support = _dedupe(support)
     deduped_contradict = _dedupe(contradict)
@@ -167,6 +131,18 @@ def _challenge(
     required_total = len(spec.required_patterns)
     required_satisfied = required_total > 0 and required_matches >= required_total
 
+    # Symptom-only support (CrashLoop, OOMKilled, a memory limit number) is
+    # not enough to confirm a cause when the spec names required evidence.
+    if spec.required_patterns and not required_satisfied:
+        return _unconfirmed_challenge(
+            spec,
+            support=deduped_support,
+            contradict=deduped_contradict,
+            required=deduped_required,
+            has_support=has_support,
+            has_contradict=has_contradict,
+            has_required_signal=has_required_signal,
+        )
     if required_satisfied and not has_contradict:
         strong = len(deduped_required) >= 2 or len(deduped_support) >= 2
         return _Challenge(
@@ -224,15 +200,42 @@ def _challenge(
             result="inconclusive",
             bayes_factor=_BF_MIXED,
         )
+    return _unconfirmed_challenge(
+        spec,
+        support=deduped_support,
+        contradict=deduped_contradict,
+        required=deduped_required,
+        has_support=has_support,
+        has_contradict=has_contradict,
+        has_required_signal=has_required_signal,
+    )
+
+
+def _unconfirmed_challenge(
+    spec: VerificationSpec,
+    *,
+    support: list[str],
+    contradict: list[str],
+    required: list[str],
+    has_support: bool,
+    has_contradict: bool,
+    has_required_signal: bool,
+) -> _Challenge:
+    if has_contradict and not has_support and not has_required_signal:
+        result, factor = "contradicted", _BF_CONTRADICTED
+    elif has_contradict:
+        result, factor = "inconclusive", _BF_MIXED
+    else:
+        result, factor = "inconclusive", _BF_INCONCLUSIVE
     return _Challenge(
         supporting_expected=spec.supporting_evidence,
         contradicting_expected=spec.contradicting_evidence,
         required_expected=spec.required_evidence,
-        observed_supporting=tuple(deduped_support[:4]),
-        observed_contradicting=tuple(deduped_contradict[:4]),
-        observed_required=tuple(deduped_required[:4]),
-        result="inconclusive",
-        bayes_factor=_BF_INCONCLUSIVE,
+        observed_supporting=tuple(support[:4]),
+        observed_contradicting=tuple(contradict[:4]),
+        observed_required=tuple(required[:4]),
+        result=result,
+        bayes_factor=factor,
     )
 
 
@@ -262,7 +265,9 @@ def verify_hypotheses_from_state(
     """
     Prior belief + observed evidence → posterior belief.
 
-    Returns verifications and re-ranked hypotheses with updated likelihoods.
+    Reads ``Hypothesis.likelihood`` as the prior, writes the renormalized
+    posterior back onto the same field (current belief after evidence).
+    Does not estimate remediation success probability.
     """
     if not state.hypotheses:
         raise ValueError("state.hypotheses is required before verify_hypotheses()")
@@ -272,12 +277,12 @@ def verify_hypotheses_from_state(
     raw_posteriors: list[float] = []
 
     for hyp in state.hypotheses:
-        spec = spec_for(hyp.description)
+        spec = spec_for(hyp.description) # get the supporting and contradicting evidence and the patterns to verify the evidence
         challenge = _challenge(hyp, spec, lines, state.observations)
-        prior = float(hyp.likelihood)
-        posterior = _from_odds(_to_odds(prior) * challenge.bayes_factor)
-        delta = round(posterior - prior, 4)
-        raw_posteriors.append(posterior)
+        prior_belief = float(hyp.likelihood)
+        posterior_belief = _from_odds(_to_odds(prior_belief) * challenge.bayes_factor)
+        delta = round(posterior_belief - prior_belief, 4)
+        raw_posteriors.append(posterior_belief)
         expected_evidence = list(
             challenge.required_expected
             if challenge.required_expected
@@ -307,9 +312,9 @@ def verify_hypotheses_from_state(
 
     normalized = _normalize(raw_posteriors)
     updated: list[Hypothesis] = []
-    for hyp, posterior in zip(state.hypotheses, normalized, strict=True):
+    for hyp, posterior_belief in zip(state.hypotheses, normalized, strict=True):
         updated.append(
-            hyp.model_copy(update={"likelihood": round(float(posterior), 4)})
+            hyp.model_copy(update={"likelihood": round(float(posterior_belief), 4)})
         )
 
     ranked = sorted(updated, key=lambda h: h.likelihood, reverse=True)

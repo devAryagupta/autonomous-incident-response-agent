@@ -6,7 +6,7 @@ from collections import Counter
 from collections.abc import Iterable
 from typing import Any
 
-from incident_agent.memory.models import EpisodeOutcome, MemoryRetrievalResult
+from incident_agent.memory.models import MemoryRetrievalResult
 
 # Historical remediation / confirmed cause → hypothesis candidate slug.
 _CAUSE_TO_SLUG: dict[str, str] = {
@@ -73,8 +73,8 @@ def prior_adjustments_from_memory(
     """
     Return additive prior boosts keyed by candidate slug.
 
-    Example: if most similar SUCCESS episodes used increase_memory_limit,
-    boost memory_limit_too_low relative to siblings.
+    Only episodes with root_cause_verified count. Service recovery after a
+    palliative restart is not evidence that the restart fixed the cause.
     """
     allowed = set(candidate_slugs)
     retrievals = [
@@ -90,13 +90,12 @@ def prior_adjustments_from_memory(
 
     for result in retrievals:
         ep = result.episode
-        if ep.outcome == EpisodeOutcome.FAILURE:
+        if not ep.assessment.root_cause_verified:
             continue
         slug = _slug_for_episode(ep.confirmed_hypothesis, ep.remediation_action)
         if slug is None or slug not in allowed:
             continue
-        outcome_w = 1.0 if ep.outcome == EpisodeOutcome.SUCCESS else 0.5
-        w = float(result.similarity_score) * outcome_w
+        w = float(result.similarity_score)
         weights[slug] += w
         total_weight += w
 

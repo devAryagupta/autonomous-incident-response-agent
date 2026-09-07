@@ -92,8 +92,9 @@ class UpdateResourceLimitAction(AbstractActionHandler):
                 target=name,
                 namespace=context.namespace,
                 reason=(
-                    "update_resource_limit validation failed "
-                    "(container_name / memory_limit syntax / quota)"
+                    "update_resource_limit invalid: "
+                    "explicit memory_limit / new_memory_limit is required "
+                    "(container_name / syntax / quota)"
                 ),
                 dry_run=dry_run,
                 details={

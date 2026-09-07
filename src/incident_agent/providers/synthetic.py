@@ -21,6 +21,13 @@ def _joined_signals(state: IncidentState) -> str:
     return "\n".join(parts).lower()
 
 
+def _live_kubernetes_observations(state: IncidentState) -> bool:
+    extra = state.observations.extra
+    if extra.get("provider") == "kubernetes":
+        return True
+    return extra.get("observation_provider") == "KubernetesObservationProvider"
+
+
 class SyntheticObservationProvider:
     """
     Pass-through observations from IncidentState.
@@ -228,6 +235,18 @@ class SyntheticMetricsProvider:
         data: dict[str, Any] = {"provider": "synthetic", "query": query, "target": request.target}
         summary = ""
 
+        if _live_kubernetes_observations(state):
+            data["unavailable"] = True
+            return EvidenceResult(
+                request_id=request.request_id,
+                type=request.type,
+                query=query,
+                target=request.target,
+                success=True,
+                summary=f"No live metrics for {query} (Prometheus not configured)",
+                data=data,
+            )
+
         if query == "container_memory_usage_bytes":
             # OOM + restart/backoff → growing memory trend (leak-shaped).
             if "oom" in signals or "137" in signals:
@@ -236,7 +255,7 @@ class SyntheticMetricsProvider:
                     start_mi, end_mi = 180, 256
                 data["memory_mi"] = {"start": start_mi, "end": end_mi, "peak": end_mi}
                 data["series"] = [start_mi, (start_mi + end_mi) // 2, end_mi]
-                summary = f"Memory increased from {start_mi}Mi to {end_mi}Mi"
+                summary = f"Sustained memory growth from {start_mi}Mi to {end_mi}Mi"
             else:
                 data["memory_mi"] = {"start": 120, "end": 130, "peak": 130}
                 summary = "Memory usage stable (~120-130Mi)"

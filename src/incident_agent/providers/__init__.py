@@ -1,5 +1,6 @@
 """Provider architecture: abstract interfaces + Stage-0 / live backends."""
 
+from incident_agent.llm.provider import LLMSuggestionProvider, NoopLLMSuggestionProvider
 from incident_agent.providers.bundle import (
     ProviderBundle,
     default_providers,
@@ -31,6 +32,7 @@ from incident_agent.providers.prometheus import (
     StaticPrometheusClient,
     build_promql,
     live_prometheus_client,
+    normalize_prometheus_url,
 )
 from incident_agent.providers.protocols import (
     ExecutionProvider,
@@ -53,10 +55,12 @@ __all__ = [
     "FakePrometheusClient",
     "KubernetesClient",
     "KubernetesObservationProvider",
+    "LLMSuggestionProvider",
     "LocalIncidentMemoryProvider",
     "MemoryProvider",
     "MetricsProvider",
     "NoMemoryProvider",
+    "NoopLLMSuggestionProvider",
     "ObservationProvider",
     "PodSnapshot",
     "PrometheusClient",
@@ -73,6 +77,7 @@ __all__ = [
     "learning_providers",
     "live_kubernetes_client",
     "live_prometheus_client",
+    "normalize_prometheus_url",
     "observations_from_pod",
     "prometheus_metrics_providers",
     "resolve_k8s_target",

@@ -11,8 +11,9 @@ def plan_fix(
     Plan-fix node (state-in, partial-state-out).
 
     Runs the Remediation Decision Engine: generate ranked RemediationOptions
-    (effectiveness + safety), choose the minimum effective safe action,
-    and materialize a FixPlan for validation. Does not execute.
+    (heuristic suitability + safety), choose the minimum effective safe action,
+    and materialize a FixPlan for validation. Suitability is not P(success).
+    Does not execute.
     """
     if not state.hypotheses:
         raise ValueError("state.hypotheses is required before plan_fix()")

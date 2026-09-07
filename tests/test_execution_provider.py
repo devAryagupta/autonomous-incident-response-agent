@@ -2,9 +2,20 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 import pytest
 
 from incident_agent.calibration.models import CalibratedAssessment
+from incident_agent.contracts import (
+    Alert,
+    FixAction,
+    FixActionType,
+    FixPlan,
+    IncidentState,
+    Observations,
+)
+from incident_agent.contracts import RiskLevel as ContractRisk
 from incident_agent.execution import (
     ActionRegistry,
     ActionRequest,
@@ -15,9 +26,9 @@ from incident_agent.execution import (
     RiskLevel,
     UnknownActionError,
 )
+from incident_agent.execution.actions.base import ActionContext
 from incident_agent.execution.actions.rollout_restart import RolloutRestartAction
 from incident_agent.execution.actions.scale_deployment import ScaleDeploymentAction
-from incident_agent.execution.actions.base import ActionContext
 
 
 def _assessment(
@@ -220,6 +231,109 @@ def test_execution_gated_assessment_forces_human_approval() -> None:
     )
     assert result.status == ActionStatus.BLOCKED_BY_POLICY
     assert result.requires_human_approval is True
+
+
+def test_missing_memory_limit_is_invalid_not_512mi() -> None:
+    client = FakeKubectlClient(
+        deployments={
+            ("default", "payment-service"): {
+                "replicas": 2,
+                "containers": {"app": {"memory_limit": "1Gi"}},
+            }
+        }
+    )
+    provider = KubectlExecutionProvider(client, default_dry_run=True)
+    failed = provider.execute_action(
+        ActionRequest(
+            type="update_resource_limit",
+            target="deployment/payment-service",
+            parameters={"container_name": "app"},
+            dry_run=True,
+        ),
+        calibrated_assessment=_assessment(0.99),
+    )
+    assert failed.status == ActionStatus.VALIDATION_FAILED
+    assert "memory_limit" in (failed.reason or "")
+    assert not any(m.method == "update_container_memory_limit" for m in client.mutations)
+
+
+def test_execute_plan_without_limit_does_not_invent_512mi() -> None:
+    client = FakeKubectlClient(
+        deployments={
+            ("default", "payment-service"): {
+                "replicas": 2,
+                "containers": {"app": {"memory_limit": "1Gi"}},
+            }
+        }
+    )
+    stamp = datetime.now(tz=UTC)
+    state = IncidentState(
+        incident_id="inc-no-limit",
+        created_at=stamp,
+        alert=Alert(alert_name="CrashLoopBackOff", severity="critical", starts_at=stamp),
+        observations=Observations(
+            extra={
+                "target_ref": "deployment/payment-service",
+                "namespace": "default",
+                "kubectl_dry_run": True,
+                "safety_threshold": 0.0,
+            }
+        ),
+        confidence_score=0.99,
+        fix_plan=FixPlan(
+            hypothesis_id="h1",
+            risk=ContractRisk.HIGH,
+            actions=[
+                FixAction(
+                    action_type=FixActionType.PATCH_RESOURCE,
+                    target="deployment/payment-service",
+                    params={"action": "increase_memory_limit", "change": "raise limit"},
+                    rationale="test",
+                )
+            ],
+        ),
+    )
+    result = KubectlExecutionProvider(client, default_dry_run=True).execute(
+        state.fix_plan, state=state
+    )
+    assert result.success is False
+    assert not any(m.method == "update_container_memory_limit" for m in client.mutations)
+
+
+def test_explicit_new_memory_limit_is_used() -> None:
+    client = FakeKubectlClient(
+        deployments={
+            ("default", "payment-service"): {
+                "replicas": 2,
+                "containers": {"app": {"memory_limit": "1Gi"}},
+            }
+        }
+    )
+    provider = KubectlExecutionProvider(client, default_dry_run=True)
+    result = provider.execute_action(
+        ActionRequest(
+            type="update_resource_limit",
+            target="deployment/payment-service",
+            parameters={"container_name": "app", "new_memory_limit": "2Gi"},
+            dry_run=True,
+        ),
+        calibrated_assessment=_assessment(0.99),
+    )
+    assert result.status == ActionStatus.DRY_RUN
+    assert any(
+        m.method == "update_container_memory_limit"
+        and m.params.get("memory_limit") == "2Gi"
+        for m in client.mutations
+    )
+
+
+def test_provider_resource_exists_delegates_to_client() -> None:
+    client = FakeKubectlClient()
+    provider = KubectlExecutionProvider(client)
+    assert provider.resource_exists("deployment", "default", "payment-service") is True
+    assert provider.resource_exists("deployment", "default", "missing") is False
+    assert ("deployment", "default", "payment-service") in client.lookups
+    assert ("deployment", "default", "missing") in client.lookups
 
 
 def test_high_risk_update_resource_requires_095() -> None:

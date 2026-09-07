@@ -9,15 +9,16 @@ from __future__ import annotations
 from incident_agent.calibration.models import CalibratedAssessment, PredictionOutcome
 
 # Blend weights: posterior + evidence quality dominate; memory is a prior check.
-_W_PREDICTED = 0.4
-_W_VERIFICATION = 0.4
-_W_HISTORICAL = 0.2
+_WEIGHT_PREDICTED = 0.4
+_WEIGHT_VERIFICATION = 0.4
+_WEIGHT_HISTORICAL = 0.2
 
 DEFAULT_SAFETY_THRESHOLD = 0.80
 # Spec walkthrough / mutation gate used in safety tests.
 MUTATION_SAFETY_THRESHOLD = 0.85
 
 # Prediction bins for reliability correction (Platt-style binning).
+# Bin is the bucket of confidence scores. past predictions are grouped by how much the confidence score they were confident in resolving the incident.
 _BIN_EDGES: tuple[tuple[float, float], ...] = (
     (0.0, 0.5),
     (0.5, 0.6),
@@ -27,68 +28,91 @@ _BIN_EDGES: tuple[tuple[float, float], ...] = (
     (0.9, 1.0),
 )
 
-
+# blend_confidence is a function that blends the predicted confidence, verification strength, and historical accuracy to produce a calibrated score.
 def blend_confidence(
     predicted_confidence: float,
     verification_strength: float,
     historical_accuracy: float,
 ) -> float:
     """
-    CalibratedScore = 0.4·Predicted + 0.4·Verification + 0.2·Historical.
+    CalibratedScore = _WEIGHT_PREDICTED·Predicted + _WEIGHT_VERIFICATION·Verification + _WEIGHT_HISTORICAL·Historical.
     """
     score = (
-        _clamp(predicted_confidence) * _W_PREDICTED
-        + _clamp(verification_strength) * _W_VERIFICATION
-        + _clamp(historical_accuracy) * _W_HISTORICAL
+        _clamp(predicted_confidence) * _WEIGHT_PREDICTED
+        + _clamp(verification_strength) * _WEIGHT_VERIFICATION
+        + _clamp(historical_accuracy) * _WEIGHT_HISTORICAL
     )
     return _clamp(score)
 
 
+def _is_in_confidence_bin(
+    confidence: float,
+    *,
+    lo: float,
+    hi: float,
+) -> bool:
+    """True when confidence is in [lo, hi); the final bin also includes 1.0."""
+    return lo <= confidence < hi or (hi == 1.0 and confidence == 1.0)
+
+# empirical_bin_accuracy is a function that calculates the empirical success rate for predictions in a given confidence bin.by calculating the number of successful predictions in the bin divided by the total number of predictions in the bin.
 def empirical_bin_accuracy(
     history: list[PredictionOutcome],
     *,
     lo: float,
     hi: float,
 ) -> float | None:
-    """Empirical success rate for predictions in ``[lo, hi)`` (hi inclusive at 1.0)."""
-    in_bin = [
-        row
-        for row in history
-        if (lo <= row.predicted_confidence < hi)
-        or (hi >= 1.0 and row.predicted_confidence == 1.0)
+    """Empirical success rate for predictions in [lo, hi).
+
+    The final bin includes confidence 1.0. Returns None when no predictions
+    fall in the requested bin.
+    """
+    bin_outcomes = [
+        outcome
+        for outcome in history
+        if _is_in_confidence_bin(outcome.predicted_confidence, lo=lo, hi=hi)
     ]
-    if not in_bin:
+    if not bin_outcomes:
         return None
-    return sum(1 for row in in_bin if row.resolved) / len(in_bin)
+    successful = sum(outcome.resolved for outcome in bin_outcomes)
+    return successful / len(bin_outcomes)
 
-
+# bin scaling is the process of adjusting the confidence score of a prediction based on the empirical success rate of predictions in the same confidence bin.
+# Example: predictions in [0.9, 1.0] historically succeed 85% of the time →
+# raw 0.95 is pulled down toward 0.85 (conservative min of raw and A).
 def apply_bin_scaling(
     confidence: float,
     history: list[PredictionOutcome],
 ) -> tuple[float, bool]:
-    """
-    If the bin containing ``confidence`` has empirical accuracy A, scale toward A.
+    """Pull confidence down to this bin's empirical accuracy; never inflate it."""
+    confidence = _clamp(confidence)
 
-    Example: predictions in [0.9, 1.0] historically succeed 85% of the time →
-    raw 0.95 is pulled down toward 0.85 (conservative min of raw and A).
-    """
     if not history:
-        return _clamp(confidence), False
+        return confidence, False
 
-    for lo, hi in _BIN_EDGES:
-        in_range = (lo <= confidence < hi) or (hi >= 1.0 and confidence >= lo)
-        if not in_range:
+    for bin_low, bin_high in _BIN_EDGES:
+        if not _is_in_confidence_bin(
+            confidence,
+            lo=bin_low,
+            hi=bin_high,
+        ):
             continue
-        accuracy = empirical_bin_accuracy(history, lo=lo, hi=hi)
-        if accuracy is None:
-            return _clamp(confidence), False
-        # Never inflate confidence above the blended score; only bound overconfidence.
-        adjusted = min(_clamp(confidence), float(accuracy))
-        return adjusted, adjusted != _clamp(confidence)
-    return _clamp(confidence), False
+
+        bin_accuracy = empirical_bin_accuracy(
+            history,
+            lo=bin_low,
+            hi=bin_high,
+        )
+        if bin_accuracy is None:
+            return confidence, False
+
+        adjusted_confidence = min(confidence, bin_accuracy)
+        was_scaled = adjusted_confidence != confidence
+        return adjusted_confidence, was_scaled
+
+    return confidence, False
 
 
-def _clamp(value: float) -> float:
+def _clamp(value: float) -> float: # clamp is a function that clamps the value between 0 and 1.
     return min(max(float(value), 0.0), 1.0)
 
 

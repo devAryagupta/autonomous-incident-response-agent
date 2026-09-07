@@ -6,6 +6,7 @@ import json
 from datetime import UTC, datetime
 from pathlib import Path
 
+from incident_agent.contracts import LLMSuggestion, LLMSuggestionRequest, LLMSuggestionResponse
 from incident_agent.datasets.core import load_jsonl
 from incident_agent.datasets.crashloopbackoff.schema import (
     Alert,
@@ -14,16 +15,16 @@ from incident_agent.datasets.crashloopbackoff.schema import (
     K8sRef,
 )
 from incident_agent.eval.run_golden import (
-    GoldenRunRow,
     GoldenReasoningTrace,
-    row_from_run,
-    run_incident_with_reasoning_trace,
+    GoldenRunRow,
     run_golden_dataset,
     run_golden_dataset_with_reasoning,
+    run_incident_with_reasoning_trace,
     state_from_incident,
     write_golden_report,
     write_reasoning_trace_report,
 )
+from incident_agent.providers import default_providers
 
 
 def _oom_incident() -> CrashLoopBackOffIncident:
@@ -98,12 +99,17 @@ def test_run_golden_dataset_one_incident() -> None:
 
 
 def test_run_golden_dataset_missing_env_prefers_patch_env_var() -> None:
-    rows = run_golden_dataset([_missing_env_incident()])
+    rows, traces = run_golden_dataset_with_reasoning([_missing_env_incident()])
     assert len(rows) == 1
     row = rows[0]
-    assert row.predicted_fix_kind == "patch_env_var"
+    last_pass = traces[0].reasoning_passes[-1]
+    # Planner still prefers the config fix; gate 0.673 < 0.7 so it is not committed.
+    assert last_pass.selected_remediation == "patch_env_var"
+    assert last_pass.route_decision == "escalate"
+    assert row.predicted_fix_kind is None
     assert row.expected_fix_kind == "patch_env_var"
-    assert row.fix_correct is True
+    assert row.fix_correct is False
+    assert row.failure_category == "INSUFFICIENT EVIDENCE"
 
 
 def test_run_golden_dataset_with_reasoning_one_incident() -> None:
@@ -121,6 +127,76 @@ def test_run_golden_dataset_with_reasoning_one_incident() -> None:
     assert one_pass.posterior_hypotheses
     assert one_pass.remediation_options
     assert one_pass.selected_remediation
+
+
+class _ScriptedLLMProvider:
+    def suggest(self, request: LLMSuggestionRequest) -> LLMSuggestionResponse:
+        if request.stage == "hypothesize":
+            return LLMSuggestionResponse(
+                provider="scripted",
+                model="mock-v1",
+                stage="hypothesize",
+                suggestions=[
+                    LLMSuggestion(
+                        suggestion_id="s-hyp-1",
+                        stage="hypothesize",
+                        kind="hypothesis",
+                        summary="Memory leak is likely",
+                        rationale="Restart loop plus heap growth.",
+                    )
+                ],
+            )
+        return LLMSuggestionResponse(
+            provider="scripted",
+            model="mock-v1",
+            stage=request.stage,
+            suggestions=[
+                LLMSuggestion(
+                    suggestion_id="s-ev-good",
+                    stage="collect_evidence",
+                    kind="evidence",
+                    summary="request previous_container_logs",
+                    rationale="Need prior crash logs.",
+                    metadata={
+                        "query": "previous_container_logs",
+                        "type": "log",
+                        "target": request.target_ref or "Deployment/order-service",
+                    },
+                ),
+                LLMSuggestion(
+                    suggestion_id="s-ev-bad",
+                    stage="collect_evidence",
+                    kind="evidence",
+                    summary="execute rollout_restart immediately",
+                    rationale="just fix it",
+                ),
+            ],
+        )
+
+
+def test_golden_runner_passes_llm_provider_into_hypothesize() -> None:
+    bundle = default_providers(llm=_ScriptedLLMProvider())
+    _state, trace = run_incident_with_reasoning_trace(_oom_incident(), providers=bundle)
+    first = trace.reasoning_passes[0]
+    assert first.llm_hypothesize is not None
+    assert first.llm_hypothesize.generated_count == 1
+    assert first.llm_hypothesize.accepted_count == 1
+    assert any(
+        item.description == "Memory leak is likely" for item in first.initial_hypotheses
+    )
+    assert first.llm_collect_evidence is not None
+    rejected = [
+        item for item in first.llm_collect_evidence.suggestions if not item.accepted
+    ]
+    assert rejected
+    assert rejected[0].rejection_reason in {
+        "control_plane_intent",
+        "forbidden_control_field",
+    }
+    assert "rollout_restart" in rejected[0].summary
+    assert trace.llm_metrics is not None
+    assert trace.llm_metrics.unsafe_accepted == 0
+    assert isinstance(trace.top_hypothesis_correct, bool)
 
 
 def test_write_golden_report(tmp_path: Path) -> None:

@@ -28,6 +28,11 @@ python -m incident_agent.datasets.crashloopbackoff.generate `
   --n 50
 ```
 
+Expanded curated golden set (36 incidents across OOMKilled / Invalid Configuration /
+Application Failure, including ambiguous evidence cases):
+
+`data/synthetic/crashloopbackoff/goldendataset/crashloop_golden_dataset_expanded.jsonl`
+
 ---
 
 ## Incident shape (fields you will use)

@@ -1,4 +1,10 @@
-"""Hypothesis verification: challenge priors against observed evidence."""
+"""Two verification stacks — do not treat them as one system.
+
+Live graph: ``engine.verify_hypotheses_from_state`` + ``contracts.Hypothesis``.
+Standalone OOM demo: ``loop.run_bayesian_verification_loop`` + ``HypothesisState``.
+
+Roles and limits: docs/VERIFICATION_STACKS.md.
+"""
 
 from incident_agent.verification.bayesian import (
     LIKELIHOOD_CONTINUOUS_MEMORY_GROWTH,
@@ -6,6 +12,11 @@ from incident_agent.verification.bayesian import (
     bayesian_update,
     status_from_posterior,
     update_for_continuous_memory_growth,
+)
+from incident_agent.verification.conclusion import (
+    chosen_confirmed_hypothesis_id,
+    confirmed_verifications,
+    summarize_cause_resolution,
 )
 from incident_agent.verification.engine import verify_hypotheses_from_state
 from incident_agent.verification.evaluator import (
@@ -21,6 +32,9 @@ from incident_agent.verification.loop import (
 
 __all__ = [
     "BayesianVerificationResult",
+    "chosen_confirmed_hypothesis_id",
+    "confirmed_verifications",
+    "summarize_cause_resolution",
     "LIKELIHOOD_CONTINUOUS_MEMORY_GROWTH",
     "LIKELIHOOD_CONTINUOUS_MEMORY_GROWTH_SPEC",
     "bayesian_update",

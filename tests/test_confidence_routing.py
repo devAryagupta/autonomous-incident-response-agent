@@ -7,7 +7,11 @@ from datetime import UTC, datetime
 from incident_agent.contracts import Alert, IncidentState, Observations
 from incident_agent.graph import GRAPH
 from incident_agent.pipeline import run_deterministic_lifecycle
-from incident_agent.routing import route_on_confidence
+from incident_agent.routing import (
+    INSUFFICIENT_CONFIDENCE,
+    NOOP_DECISION,
+    route_on_confidence,
+)
 
 _SECRET_LOGS = [
     (
@@ -56,6 +60,7 @@ def test_happy_path_high_confidence_exits_without_replan() -> None:
 
     assert out.phase == "done"
     assert out.route == "end"
+    assert out.decision is None
     assert out.replan_count == 0
     assert out.confidence_score is not None
     assert out.confidence_score >= 0.0
@@ -74,7 +79,12 @@ def test_loop_path_low_confidence_increments_replan_once() -> None:
     out = GRAPH.invoke(initial)
 
     assert out.phase == "done"
-    assert out.route == "end"
+    assert out.route == "escalate"
+    assert out.decision == NOOP_DECISION
+    assert out.decision_reason == INSUFFICIENT_CONFIDENCE
+    assert out.chosen_remediation_id is None
+    assert out.execution is not None
+    assert out.execution.status == "skipped"
     assert out.replan_count == 1
     assert any("replan: count=1/1" in line for line in out.log)
     assert out.confidence_score is not None
@@ -92,12 +102,13 @@ def test_max_circuit_breaker_runs_exactly_two_replans() -> None:
     out = GRAPH.invoke(initial)
 
     assert out.phase == "done"
-    assert out.route == "end"
+    assert out.route == "escalate"
+    assert out.decision == NOOP_DECISION
     assert out.replan_count == 2
     assert out.max_replans == 2
     assert any("replan: count=1/2" in line for line in out.log)
     assert any("replan: count=2/2" in line for line in out.log)
-    assert any("max_replans_reached" in line for line in out.log)
+    assert any("finalize: noop" in line for line in out.log)
     # No third replan entry.
     assert not any("replan: count=3/" in line for line in out.log)
 
@@ -105,7 +116,7 @@ def test_max_circuit_breaker_runs_exactly_two_replans() -> None:
 def test_router_decisions_are_deterministic() -> None:
     high = _initial_state(incident_id="r-high", confidence_threshold=0.5)
     high.confidence_score = 0.8
-    assert route_on_confidence(high) == "end"
+    assert route_on_confidence(high) == "execute"
 
     low_retry = _initial_state(incident_id="r-low", confidence_threshold=0.9)
     low_retry.confidence_score = 0.1
@@ -117,7 +128,7 @@ def test_router_decisions_are_deterministic() -> None:
     exhausted.confidence_score = 0.1
     exhausted.replan_count = 2
     exhausted.max_replans = 2
-    assert route_on_confidence(exhausted) == "end"
+    assert route_on_confidence(exhausted) == "escalate"
 
 
 def test_pipeline_and_graph_parity_with_replan_loop() -> None:

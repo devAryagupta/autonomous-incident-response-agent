@@ -24,6 +24,7 @@ def test_diagnose_interface_returns_diagnosis() -> None:
     assert out.summary
     assert 0.0 <= out.confidence <= 1.0
     assert isinstance(out.evidence, list)
+    assert out.scope_valid is True
 
 
 def test_diagnose_oomkilled_from_exit_code_and_event() -> None:

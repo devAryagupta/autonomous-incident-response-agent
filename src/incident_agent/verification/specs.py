@@ -1,4 +1,8 @@
-"""Evidence specification catalog for hypothesis verification."""
+"""Regex evidence specs for the live graph belief update only.
+
+Consumed by ``verification/engine.py``. The standalone OOM loop does not
+read this catalog; it uses a hand-set P(E|H) matrix in ``bayesian.py``.
+"""
 
 from __future__ import annotations
 
@@ -21,6 +25,8 @@ def _rx(*parts: str) -> re.Pattern[str]:
 
 
 # Keys must match Hypothesis.description values from the hypothesis engine.
+#verification specs gives you the evidence to support or contradict a hypothesis it gives the patterns to match the evidence and the evidence itself 
+# declaration of the verification specs map for the hypotheses
 VERIFICATION_SPECS: dict[str, VerificationSpec] = {
     "Memory leak": VerificationSpec(
         supporting_evidence=(
@@ -31,14 +37,14 @@ VERIFICATION_SPECS: dict[str, VerificationSpec] = {
             "Traffic/load spike explains memory pressure better",
             "OOM occurs only at startup",
         ),
-        required_evidence=("Memory growth trend in logs/metrics",),
+        required_evidence=(
+            "Sustained or rising-cycle memory growth (not a repeated startup climb)",
+        ),
         support_patterns=(
             _rx(
+                r"sustained memory growth|cycle peaks rose|heap usage grew",
                 r"gradual|grew|growth|increasing|increased from",
-                r"\d+\s*mi.+\d+\s*mi",
-                r"heap|leak",
-                r"repeated|again|multiple",
-                r"back-?off restarting",
+                r"heap usage|memory leak",
             ),
         ),
         contradict_patterns=(
@@ -46,7 +52,11 @@ VERIFICATION_SPECS: dict[str, VerificationSpec] = {
             _rx(r"single startup|only at startup"),
         ),
         required_patterns=(
-            _rx(r"memory increased from \d+\s*mi to \d+\s*mi", r"heap usage grew"),
+            _rx(
+                r"cycle peaks rose",
+                r"sustained memory growth",
+                r"heap usage grew",
+            ),
         ),
     ),
     "Memory limit too low": VerificationSpec(
@@ -64,7 +74,7 @@ VERIFICATION_SPECS: dict[str, VerificationSpec] = {
             _rx(r"limit|requests/limits|memory limit|near memory limit"),
         ),
         contradict_patterns=(
-            _rx(r"gradual|grew|growth|leak|increased from \d+mi to"),
+            _rx(r"sustained memory growth|cycle peaks rose|heap usage grew"),
             _rx(r"traffic spike|surge in requests|rps=\d{3,}"),
         ),
         required_patterns=(

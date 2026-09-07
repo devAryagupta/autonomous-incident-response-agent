@@ -45,7 +45,7 @@ def _print_one(incident: CrashLoopBackOffIncident) -> None:
     for i, h in enumerate(state.hypotheses, start=1):
         print(f"{i}.")
         print(h.description)
-        print(f"Confidence: {h.likelihood:.2f}")
+        print(f"Belief: {h.belief:.2f}")
         if h.evidence:
             print("Evidence:")
             for e in h.evidence:
@@ -102,7 +102,7 @@ def _print_one(incident: CrashLoopBackOffIncident) -> None:
                 f"   risk={opt.risk.value} blast_radius={opt.blast_radius} "
                 f"reversibility={opt.reversibility} rollback_possible={opt.rollback_possible}"
             )
-            print(f"   confidence={opt.confidence:.2f} safety_score={opt.safety_score:.2f}")
+            print(f"   suitability={opt.suitability:.2f} safety_score={opt.safety_score:.2f}")
         print()
 
     print("Fix Plan:")
@@ -124,7 +124,7 @@ def _print_one(incident: CrashLoopBackOffIncident) -> None:
         print("<none>")
     print()
 
-    print("Confidence:")
+    print("Gate score:")
     print(f"{state.confidence_score:.2f}" if state.confidence_score is not None else "<none>")
     print()
 
@@ -151,10 +151,18 @@ def _print_one(incident: CrashLoopBackOffIncident) -> None:
         print()
 
     if state.outcome_verification:
+        flags = state.outcome_verification.assessment
         print("Outcome Verification:")
         print(f"resolved={state.outcome_verification.resolved}")
         print(f"observed: {state.outcome_verification.observed_outcome}")
         print(f"unmet: {state.outcome_verification.unmet_expectations}")
+        print(
+            "assessment: "
+            f"execution_success={flags.execution_success} "
+            f"service_recovered={flags.service_recovered} "
+            f"stable_recovery={flags.stable_recovery} "
+            f"root_cause_verified={flags.root_cause_verified}"
+        )
         print(state.outcome_verification.reason)
         print()
 

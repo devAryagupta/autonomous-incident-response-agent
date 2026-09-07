@@ -13,6 +13,9 @@ _EXPECTED_BY_ACTION: dict[str, tuple[str, ...]] = {
         "pod becomes healthy",
         "crashloop clears",
     ),
+    "rollout_restart": (
+        "pod becomes healthy",
+    ),
     "restart_pod": (
         "pod becomes healthy",
     ),
@@ -51,6 +54,7 @@ _EXPECTED_BY_ACTION: dict[str, tuple[str, ...]] = {
 _ROLLBACK_BY_ACTION: dict[str, str] = {
     "increase_memory_limit": "restore_previous_limit",
     "rollback_deployment": "roll_forward_or_reapply",
+    "rollout_restart": "rollout_undo",
     "restart_pod": "none",
     "scale_deployment": "restore_previous_replica_count",
     "create_or_fix_secret": "delete_or_revert_secret",
@@ -68,6 +72,16 @@ _PRECONDITIONS_BASE = (
     "fix plan validated",
     "approval required",
 )
+
+
+def decision_action(state: IncidentState, *, plan: FixPlan | None = None) -> str:
+    """Canonical action identity from the decision (execution_plan / FixPlan)."""
+    fix_plan = plan if plan is not None else state.fix_plan
+    if fix_plan is None:
+        if state.execution_plan and state.execution_plan.action:
+            return state.execution_plan.action
+        return "noop"
+    return _resolve_action(state, fix_plan)
 
 
 def _resolve_action(state: IncidentState, fix_plan: FixPlan) -> str:
