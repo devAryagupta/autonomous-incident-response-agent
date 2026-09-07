@@ -1,13 +1,9 @@
 """Extract scoped CrashLoopBackOff signals from logs/events/metrics."""
 
 from __future__ import annotations
-# import re is a regular expression module that is used to search for patterns in text.
+
 import re
-from dataclasses import dataclass, field 
-# dataclass is a decorator that is used to create a class that is used to store data.
-# similar to the all args constructor in the class.
-# field is a decorator that is used to create a field that is used to store data.
-# similar to the __init__ method in the class.
+from dataclasses import dataclass, field
 from typing import Literal
 
 from incident_agent.contracts import Evidence, Observations
@@ -37,9 +33,7 @@ _APP_FAILURE_REGEX = re.compile(
 )
 
 
-@dataclass(frozen=True, slots=True) 
-# frozen=True means that the class is immutable. now they are the readonly values.
-# slots=True means that the class is memory efficient. you can't add new attributes to the class.
+@dataclass(frozen=True, slots=True)
 class ExtractedEvidence:
     """Normalized signals the diagnosis engine scores against."""
 
@@ -53,8 +47,6 @@ class ExtractedEvidence:
 
 
 @dataclass
-# private class is prefixed with an underscore.
-
 class _Accumulator:
     items: list[Evidence] = field(default_factory=list)
     exit_codes: list[int] = field(default_factory=list)

@@ -8,7 +8,6 @@ from incident_agent.contracts import EvidenceRequest, IncidentState
 
 
 @dataclass(frozen=True, slots=True)
-
 class _Need:
     type: str # type means the type of the evidence request. which provider to use to get the evidence.
     query: str # query means the query to the evidence request. command to run to get the evidence.
