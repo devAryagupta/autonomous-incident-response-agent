@@ -101,14 +101,26 @@ def test_k8s_bundle_uses_prometheus_when_metrics_client_given() -> None:
     assert isinstance(bare.metrics, SyntheticMetricsProvider)
 
 
-def test_k8s_plus_prometheus_growth_confirms_leak() -> None:
+def test_k8s_plus_prometheus_rising_cycles_confirm_leak() -> None:
     bundle = k8s_observation_providers(
         client=_fake_oom_client(),
         metrics_client=FakePrometheusClient(
             {
-                "container_memory_usage_bytes": [200.0, 450.0, 900.0],
+                "container_memory_usage_bytes": [
+                    20.0,
+                    45.0,
+                    70.0,
+                    5.0,
+                    30.0,
+                    60.0,
+                    85.0,
+                    8.0,
+                    40.0,
+                    75.0,
+                    105.0,
+                ],
                 "container_memory_working_set_bytes": [180.0, 200.0],
-                "http_requests_per_second": [10.0, 11.0, 10.0],
+                "http_requests_per_second": [],
             }
         ),
     )
@@ -116,4 +128,24 @@ def test_k8s_plus_prometheus_growth_confirms_leak() -> None:
     results = {item.hypothesis: item.result for item in out.hypothesis_verifications}
     assert results["Memory leak"] == "confirmed"
     assert results["Memory limit too low"] == "inconclusive"
+    assert results["Traffic spike"] == "inconclusive"
     assert out.chosen_hypothesis_id is not None
+
+
+def test_k8s_plus_prometheus_sawtooth_does_not_confirm_leak() -> None:
+    bundle = k8s_observation_providers(
+        client=_fake_oom_client(),
+        metrics_client=FakePrometheusClient(
+            {
+                "container_memory_usage_bytes": [0.2, 71.0, 0.4, 70.0, 0.3, 72.0],
+                "container_memory_working_set_bytes": [0.2, 68.0, 0.3, 67.0],
+                "http_requests_per_second": [],
+            }
+        ),
+    )
+    out = GRAPH.invoke(_state_for_pod(), providers=bundle)
+    results = {item.hypothesis: item.result for item in out.hypothesis_verifications}
+    assert results["Memory leak"] == "inconclusive"
+    assert results["Memory limit too low"] == "inconclusive"
+    assert results["Traffic spike"] == "inconclusive"
+    assert out.chosen_hypothesis_id is None

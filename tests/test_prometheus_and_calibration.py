@@ -82,6 +82,17 @@ def test_promql_formatting_for_pod_target() -> None:
     ) == 'container_memory_usage_bytes{namespace="default",pod="oom-demo"}'
 
 
+def test_promql_working_set_uses_max_over_time() -> None:
+    assert build_promql(
+        "container_memory_working_set_bytes",
+        "pod/oom-demo",
+        namespace="default",
+    ) == (
+        "max_over_time(container_memory_working_set_bytes"
+        '{namespace="default",pod="oom-demo"}[5m])'
+    )
+
+
 def test_promql_formatting_for_deployment_target() -> None:
     promql = build_promql(
         "container_memory_usage_bytes",
@@ -147,6 +158,74 @@ def test_summarize_uses_peak_not_last_sample() -> None:
     )
     assert result.summary == "Memory increased from 10Mi to 40Mi"
     assert result.data["memory_mi"]["peak"] == 40.0
+
+
+def test_summarize_rising_cycles_is_leak_shaped() -> None:
+    provider = _provider(
+        {
+            "container_memory_usage_bytes": [
+                20.0,
+                45.0,
+                70.0,
+                5.0,
+                30.0,
+                60.0,
+                85.0,
+                8.0,
+                40.0,
+                75.0,
+                105.0,
+            ]
+        }
+    )
+    state = IncidentState(
+        incident_id="inc-prom-cycles",
+        created_at=datetime.now(tz=UTC),
+        alert=Alert(
+            alert_name="CrashLoopBackOff",
+            severity="critical",
+            starts_at=datetime.now(tz=UTC),
+        ),
+        observations=Observations(extra={"target_ref": "pod/oom-demo"}),
+    )
+    result = provider.execute_evidence_request(
+        ContractEvidenceRequest(
+            request_id="er-cycles",
+            type="metric",
+            query="container_memory_usage_bytes",
+            target="pod/oom-demo",
+        ),
+        state=state,
+    )
+    assert result.summary.startswith("Cycle peaks rose")
+    assert "70Mi" in result.summary
+    assert "105Mi" in result.summary
+
+
+def test_summarize_similar_sawtooth_is_startup_allocation() -> None:
+    provider = _provider(
+        {"container_memory_usage_bytes": [0.2, 71.0, 0.4, 70.0, 0.3, 72.0]}
+    )
+    state = IncidentState(
+        incident_id="inc-prom-saw",
+        created_at=datetime.now(tz=UTC),
+        alert=Alert(
+            alert_name="CrashLoopBackOff",
+            severity="critical",
+            starts_at=datetime.now(tz=UTC),
+        ),
+        observations=Observations(extra={"target_ref": "pod/oom-demo"}),
+    )
+    result = provider.execute_evidence_request(
+        ContractEvidenceRequest(
+            request_id="er-saw",
+            type="metric",
+            query="container_memory_usage_bytes",
+            target="pod/oom-demo",
+        ),
+        state=state,
+    )
+    assert result.summary.startswith("Repeated startup allocation")
 
 
 def test_bytes_series_converted_to_mebibytes() -> None:

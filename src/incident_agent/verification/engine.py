@@ -22,12 +22,6 @@ from incident_agent.contracts import (
 )
 from incident_agent.verification.specs import VerificationSpec, spec_for
 
-# THIS REGEX WILL BE USED TO MATCH THE MEMORY GROWTH OBSERVATIONS
-_MEMORY_GROWTH_REGEX = re.compile(
-    r"(?:memory|rss|heap)?\s*(?:increased|grew)\s+(?:from\s+)?(\d+)\s*mi\b.*?\b(\d+)\s*mi\b",
-    re.IGNORECASE,
-)
-
 # Bayes factors: prior odds × factor → posterior odds (then renormalize across set).
 _BF_CONFIRMED_STRONG = 6.0
 _BF_CONFIRMED = 2.5
@@ -118,68 +112,15 @@ def _dedupe(values: list[str]) -> list[str]:
     return out
 
 
-def _metrics_for_verification(observations: Observations) -> dict[str, object]:
-    """Ignore synthetic stubs on a live cluster; keep Prometheus series."""
-    raw = observations.extra.get("metrics", {})
-    if not isinstance(raw, dict):
-        return {}
-    if observations.extra.get("provider") == "kubernetes":
-        if raw.get("provider") != "prometheus":
-            return {}
-    return raw
-
-
-def _memory_growth_observations(lines: list[str], observations: Observations) -> list[str]:
-    found: list[str] = []
-    for line in lines:
-        match = _MEMORY_GROWTH_REGEX.search(line)
-        if match:
-            low, high = int(match.group(1)), int(match.group(2))
-            if high > low:
-                found.append(f"Memory increased from {low}Mi to {high}Mi")
-    series = _metrics_for_verification(observations)
-    if isinstance(series, dict):
-        mem = series.get("memory_mi") or series.get("memory") or series.get("series", {})
-        if isinstance(mem, dict):
-            start = mem.get("start") or mem.get("min")
-            end = mem.get("end") or mem.get("max") or mem.get("peak")
-            if isinstance(start, (int, float)) and isinstance(end, (int, float)) and end > start:
-                found.append(f"Memory increased from {int(start)}Mi to {int(end)}Mi")
-        elif isinstance(mem, list) and len(mem) >= 2:
-            try:
-                start_v = float(mem[0])
-                end_v = max(float(value) for value in mem)
-            except (TypeError, ValueError):
-                start_v = end_v = 0.0
-            if end_v > start_v:
-                found.append(f"Memory increased from {int(start_v)}Mi to {int(end_v)}Mi")
-    # Dedup
-    out: list[str] = []
-    seen: set[str] = set()
-    for item in found:
-        if item not in seen:
-            seen.add(item)
-            out.append(item)
-    return out
-
-
 def _challenge(
-    hyp: Hypothesis,
+    _hyp: Hypothesis,
     spec: VerificationSpec,
     lines: list[str],
-    observations: Observations,
+    _observations: Observations,
 ) -> _Challenge:
-    # collect the hits for the support and contradict patterns and required patterns
     support = _collect_hits(lines, spec.support_patterns)
     contradict = _collect_hits(lines, spec.contradict_patterns)
     required, required_matches = _collect_required_hits(lines, spec.required_patterns)
-    # if the hypothesis is a memory leak, collect the memory growth observations and add them to the support and required patterns
-    if hyp.description == "Memory leak":
-        growth = _memory_growth_observations(lines, observations)
-        support.extend(growth)
-        required.extend(growth)
-        if growth and spec.required_patterns:
-            required_matches = max(required_matches, 1)
 
     deduped_support = _dedupe(support)
     deduped_contradict = _dedupe(contradict)

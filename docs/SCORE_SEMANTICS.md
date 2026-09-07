@@ -59,9 +59,14 @@ not a second probability.
 `HypothesisVerification.result` is the **root-cause** verdict. A certain
 diagnosis (OOMKilled, exit 137, CrashLoop) is **not** confirmation of leak vs
 limit vs traffic. Required evidence on the spec must be present to confirm a
-cause. When every cause is `inconclusive`, `chosen_hypothesis_id` stays empty
-and planning emits investigate / NOOP. Renormalized belief may still rank the
-set; it is not treated as a chosen root cause.
+cause. For **Memory leak**, a single climb (`Memory increased from XMi to YMi`)
+or a repeated CrashLoop sawtooth with similar peaks is not enough. Confirmation
+needs rising cycle peaks or sustained growth that approaches the configured
+limit. **Memory limit too low** still requires peak RSS ≥ 90% of the limit
+(from `max_over_time` when Prometheus is attached). When every cause is
+`inconclusive`, `chosen_hypothesis_id` stays empty and planning emits
+investigate / NOOP. Renormalized belief may still rank the set; it is not
+treated as a chosen root cause.
 
 A second implementation (`verification/loop.py` + `HypothesisState`) runs
 textbook `P(H|E) ∝ P(E|H) P(H)` on one OOM metric walkthrough. It is **not**

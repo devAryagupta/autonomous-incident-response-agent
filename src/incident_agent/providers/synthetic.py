@@ -255,7 +255,7 @@ class SyntheticMetricsProvider:
                     start_mi, end_mi = 180, 256
                 data["memory_mi"] = {"start": start_mi, "end": end_mi, "peak": end_mi}
                 data["series"] = [start_mi, (start_mi + end_mi) // 2, end_mi]
-                summary = f"Memory increased from {start_mi}Mi to {end_mi}Mi"
+                summary = f"Sustained memory growth from {start_mi}Mi to {end_mi}Mi"
             else:
                 data["memory_mi"] = {"start": 120, "end": 130, "peak": 130}
                 summary = "Memory usage stable (~120-130Mi)"

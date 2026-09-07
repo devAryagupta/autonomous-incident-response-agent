@@ -81,7 +81,7 @@ def test_verify_memory_growth_confirms_leak_and_downranks_traffic() -> None:
         ],
         logs=[
             "OOMKilled: Container was killed due to memory usage",
-            "memory increased from 200Mi to 900Mi",
+            "Sustained memory growth from 200Mi to 900Mi",
             "exit status 137",
         ],
     )
@@ -96,6 +96,75 @@ def test_verify_memory_growth_confirms_leak_and_downranks_traffic() -> None:
     assert any("900Mi" in e for e in verifications["Memory leak"].observed_evidence)
     assert verifications["Traffic spike"].result == "inconclusive"
     assert hyps[0].likelihood > hyps[-1].likelihood
+
+
+def test_generic_memory_increase_does_not_confirm_leak() -> None:
+    diagnosis = Diagnosis(
+        summary="OOMKilled",
+        category="OOMKilled",
+        confidence=0.9,
+        evidence=[Evidence(source="events", text="OOMKilled event detected")],
+    )
+    state = _base_state(
+        diagnosis=diagnosis,
+        events=["Warning  OOMKilled  kubelet  Container killed due to OOM"],
+        logs=[
+            "OOMKilled: Container was killed due to memory usage",
+            "Memory increased from 0Mi to 71Mi",
+            "exit status 137",
+        ],
+    )
+    state.hypotheses = hypothesize(state)["hypotheses"]  # type: ignore[assignment]
+    updates = verify_hypotheses(state)
+    verifications = {v.hypothesis: v.result for v in updates["hypothesis_verifications"]}
+    assert verifications["Memory leak"] == "inconclusive"
+    assert updates["chosen_hypothesis_id"] is None
+
+
+def test_rising_cycle_peaks_confirm_leak() -> None:
+    diagnosis = Diagnosis(
+        summary="OOMKilled",
+        category="OOMKilled",
+        confidence=0.9,
+        evidence=[Evidence(source="events", text="OOMKilled event detected")],
+    )
+    state = _base_state(
+        diagnosis=diagnosis,
+        events=["Warning  OOMKilled  kubelet  Container killed due to OOM"],
+        logs=[
+            "OOMKilled: Container was killed due to memory usage",
+            "Cycle peaks rose 20Mi → 45Mi → 70Mi",
+            "exit status 137",
+        ],
+    )
+    state.hypotheses = hypothesize(state)["hypotheses"]  # type: ignore[assignment]
+    updates = verify_hypotheses(state)
+    verifications = {v.hypothesis: v.result for v in updates["hypothesis_verifications"]}
+    assert verifications["Memory leak"] == "confirmed"
+    assert updates["chosen_hypothesis_id"] is not None
+
+
+def test_repeated_startup_allocation_does_not_confirm_leak() -> None:
+    diagnosis = Diagnosis(
+        summary="OOMKilled",
+        category="OOMKilled",
+        confidence=0.9,
+        evidence=[Evidence(source="events", text="OOMKilled event detected")],
+    )
+    state = _base_state(
+        diagnosis=diagnosis,
+        events=["Warning  OOMKilled  kubelet  Container killed due to OOM"],
+        logs=[
+            "OOMKilled: Container was killed due to memory usage",
+            "Repeated startup allocation (peaks ~71Mi)",
+            "exit status 137",
+        ],
+    )
+    state.hypotheses = hypothesize(state)["hypotheses"]  # type: ignore[assignment]
+    updates = verify_hypotheses(state)
+    verifications = {v.hypothesis: v.result for v in updates["hypothesis_verifications"]}
+    assert verifications["Memory leak"] == "inconclusive"
+    assert updates["chosen_hypothesis_id"] is None
 
 
 def test_oom_symptom_only_leaves_causes_inconclusive() -> None:

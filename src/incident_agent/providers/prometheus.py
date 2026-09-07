@@ -17,6 +17,11 @@ from incident_agent.evidence.models import (
     EvidenceType,
     TelemetryResult,
 )
+from incident_agent.providers.memory_series import (
+    format_mi,
+    near_limit,
+    summarize_memory_usage,
+)
 
 
 class BasePrometheusClient(ABC):
@@ -137,7 +142,7 @@ def build_promql(
     if query == "container_memory_usage_bytes":
         return f"container_memory_usage_bytes{{{selector}}}"
     if query == "container_memory_working_set_bytes":
-        return f"container_memory_working_set_bytes{{{selector}}}"
+        return f"max_over_time(container_memory_working_set_bytes{{{selector}}}[5m])"
     if query == "http_requests_per_second":
         workload = _workload_from_target(target)
         extra = f',namespace="{namespace}"' if namespace else ""
@@ -437,10 +442,6 @@ def _series_in_query_units(query: str, series: list[float]) -> list[float]:
     return [value / (1024 * 1024) for value in series]
 
 
-def _fmt_mi(value: float) -> str:
-    return f"{int(round(value))}Mi"
-
-
 def _parse_limit_mi(raw: object) -> float | None:
     if not isinstance(raw, str):
         return None
@@ -465,22 +466,15 @@ def _summarize_series(
     }:
         if len(series) < 2:
             return f"Insufficient memory samples for {target}"
-        start_mi = series[0]
         peak_mi = max(series)
         limit_mi = _parse_limit_mi(memory_limit)
-        if query == "container_memory_working_set_bytes" and limit_mi:
-            if peak_mi >= 0.9 * limit_mi:
-                return (
-                    f"Peak RSS {_fmt_mi(peak_mi)} near memory limit {_fmt_mi(limit_mi)} "
-                    f"for {target}"
-                )
-            return (
-                f"Peak RSS {_fmt_mi(peak_mi)} under limit {_fmt_mi(limit_mi)} "
-                f"for {target}"
-            )
-        if peak_mi > start_mi:
-            return f"Memory increased from {_fmt_mi(start_mi)} to {_fmt_mi(peak_mi)}"
-        return f"Memory usage stable (~{_fmt_mi(start_mi)}-{_fmt_mi(peak_mi)})"
+        if query == "container_memory_working_set_bytes" and limit_mi is not None:
+            label = format_mi(peak_mi)
+            limit_label = format_mi(limit_mi)
+            if near_limit(peak_mi, limit_mi):
+                return f"Peak RSS {label} near memory limit {limit_label} for {target}"
+            return f"Peak RSS {label} under limit {limit_label} for {target}"
+        return summarize_memory_usage(series, limit_mi=limit_mi)
     if query == "http_requests_per_second":
         if not series:
             return f"No RPS samples for {target}"

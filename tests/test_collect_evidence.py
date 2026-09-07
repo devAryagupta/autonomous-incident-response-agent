@@ -79,9 +79,9 @@ def test_collect_evidence_fulfills_requests_and_enriches_observations() -> None:
 
     assert len(results) == len(requests)
     assert all(r.success for r in results)
-    assert any("Memory increased from" in (r.summary or "") for r in results)
+    assert any("Sustained memory growth from" in (r.summary or "") for r in results)
     assert obs.extra["metrics"]["memory_mi"]["end"] == 900
-    assert any("Memory increased from" in line for line in obs.logs)
+    assert any("Sustained memory growth from" in line for line in obs.logs)
 
 
 def test_synthetic_metrics_provider_executes_evidence_request() -> None:
