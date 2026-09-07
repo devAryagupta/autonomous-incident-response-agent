@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from incident_agent.llm.provider import LLMSuggestionProvider, NoopLLMSuggestionProvider
 from incident_agent.memory.store import BaseMemoryStore
 from incident_agent.providers.dry_run import DryRunExecutionProvider
 from incident_agent.providers.memory import LocalIncidentMemoryProvider, NoMemoryProvider
@@ -34,15 +35,17 @@ class ProviderBundle:
     metrics: MetricsProvider
     execution: ExecutionProvider
     memory: MemoryProvider
+    llm: LLMSuggestionProvider = field(default_factory=NoopLLMSuggestionProvider)
 
 
-def default_providers() -> ProviderBundle:
+def default_providers(*, llm: LLMSuggestionProvider | None = None) -> ProviderBundle:
     """Stage-0 defaults: synthetic observations/metrics, dry-run, no persistent memory."""
     return ProviderBundle(
         observations=SyntheticObservationProvider(),
         metrics=SyntheticMetricsProvider(),
         execution=DryRunExecutionProvider(),
         memory=NoMemoryProvider(),
+        llm=llm or NoopLLMSuggestionProvider(),
     )
 
 
@@ -50,6 +53,7 @@ def learning_providers(
     *,
     memory_path: str | Path | None = None,
     memory_store: BaseMemoryStore | None = None,
+    llm: LLMSuggestionProvider | None = None,
 ) -> ProviderBundle:
     """Same Stage-0 backends with LocalIncidentMemoryProvider enabled."""
     memory: MemoryProvider
@@ -62,6 +66,7 @@ def learning_providers(
         metrics=SyntheticMetricsProvider(),
         execution=DryRunExecutionProvider(),
         memory=memory,
+        llm=llm or NoopLLMSuggestionProvider(),
     )
 
 
@@ -73,6 +78,7 @@ def k8s_observation_providers(
     prometheus_url: str | None = None,
     memory_path: str | Path | None = None,
     memory_store: BaseMemoryStore | None = None,
+    llm: LLMSuggestionProvider | None = None,
 ) -> ProviderBundle:
     """
     Real Kubernetes observations; execution stays Stage-0 dry-run.
@@ -95,6 +101,7 @@ def k8s_observation_providers(
         ),
         execution=DryRunExecutionProvider(),
         memory=_memory_backend(memory_path=memory_path, memory_store=memory_store),
+        llm=llm or NoopLLMSuggestionProvider(),
     )
 
 
@@ -104,6 +111,7 @@ def prometheus_metrics_providers(
     prometheus_url: str | None = None,
     memory_path: str | Path | None = None,
     memory_store: BaseMemoryStore | None = None,
+    llm: LLMSuggestionProvider | None = None,
 ) -> ProviderBundle:
     """
     Real Prometheus metrics; observations/execution still Stage-0 stubs.
@@ -121,6 +129,7 @@ def prometheus_metrics_providers(
         metrics=metrics,
         execution=DryRunExecutionProvider(),
         memory=_memory_backend(memory_path=memory_path, memory_store=memory_store),
+        llm=llm or NoopLLMSuggestionProvider(),
     )
 
 
@@ -132,6 +141,7 @@ def kubectl_execution_providers(
     default_dry_run: bool = True,
     memory_path: str | Path | None = None,
     memory_store: BaseMemoryStore | None = None,
+    llm: LLMSuggestionProvider | None = None,
 ) -> ProviderBundle:
     """
     Allowlisted Kubectl execution; observations/metrics still Stage-0 stubs.
@@ -159,6 +169,7 @@ def kubectl_execution_providers(
             default_dry_run=default_dry_run,
         ),
         memory=_memory_backend(memory_path=memory_path, memory_store=memory_store),
+        llm=llm or NoopLLMSuggestionProvider(),
     )
 
 

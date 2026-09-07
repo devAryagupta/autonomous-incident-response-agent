@@ -85,6 +85,15 @@ def _collect_evidence_node(
     return updates
 
 
+def _hypothesize_node(
+    state: IncidentState,
+    config: RunnableConfig = None,
+) -> dict[str, object]:
+    updates = dict(hypothesize(state, config=_config_from_runnable(config)))
+    updates["phase"] = "hypothesize"
+    return updates
+
+
 def _confidence_node(
     state: IncidentState,
     config: RunnableConfig = None,
@@ -149,7 +158,7 @@ def build_graph():
 
     g.add_node("enrich", _enrich_node)
     g.add_node("diagnose", _with_phase(phase="diagnose", fn=diagnose))
-    g.add_node("hypothesize", _with_phase(phase="hypothesize", fn=hypothesize))
+    g.add_node("hypothesize", _hypothesize_node)
     g.add_node("collect_evidence", _collect_evidence_node)
     g.add_node(
         "verify_hypotheses",

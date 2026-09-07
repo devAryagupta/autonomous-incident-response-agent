@@ -4,6 +4,18 @@ These models are intentionally defined *before* any AI, Prometheus, or Kubernete
 so every node and tool shares the same stable object contracts.
 """
 
+from incident_agent.contracts.llm import (
+    BLOCKED_CONTROL_KEYS,
+    AdvisoryEvidenceRequestCandidate,
+    AdvisoryHypothesisCandidate,
+    LLMSuggestion,
+    LLMSuggestionRequest,
+    LLMSuggestionResponse,
+    SuggestionIngestionResult,
+    SuggestionKind,
+    SuggestionRejection,
+    SuggestionStage,
+)
 from incident_agent.contracts.models import (
     Alert,
     Approval,
@@ -33,7 +45,10 @@ from incident_agent.contracts.models import (
 
 __all__ = [
     "Alert",
+    "AdvisoryEvidenceRequestCandidate",
+    "AdvisoryHypothesisCandidate",
     "Approval",
+    "BLOCKED_CONTROL_KEYS",
     "ConfidenceScore",
     "Diagnosis",
     "Evidence",
@@ -49,11 +64,18 @@ __all__ = [
     "IncidentState",
     "Observations",
     "OutcomeVerification",
+    "LLMSuggestion",
+    "LLMSuggestionRequest",
+    "LLMSuggestionResponse",
     "RemediationOption",
     "RemediationPurpose",
     "ResolutionAssessment",
     "ResourceRef",
     "RiskLevel",
+    "SuggestionIngestionResult",
+    "SuggestionKind",
+    "SuggestionRejection",
+    "SuggestionStage",
     "ValidationVerdict",
     "ValidationResult",
 ]

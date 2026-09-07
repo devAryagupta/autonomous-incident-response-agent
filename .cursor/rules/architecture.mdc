@@ -12,8 +12,9 @@ Follow `docs/CODING_PRINCIPLES.md` and `CONTRIBUTING.md`.
 - `contracts/` — types only (`IncidentState`, etc.)
 - Business (`nodes/`, `remediation/`, `validation/`) — domain decisions; no LLM, no live I/O
 - Orchestration (`graph.py`, `pipeline.py`, `routing.py`) — sequencing / replan only
-- `providers/` — Observation / Metrics / Execution / Memory adapters
-- Future: `prompts/`, `llm/`, `tools/` — create those packages; do not dump into business nodes
+- `providers/` — Observation / Metrics / Execution / Memory / LLM adapters
+- `llm/` — advisory suggestion clients + ingestion; never routing, approval, or execution
+- Later: `prompts/`, `tools/` — do not dump those into business nodes
 
 ## Structure
 

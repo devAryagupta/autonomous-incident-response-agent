@@ -23,20 +23,21 @@ implementations exist; only the live stack is on the graph —
 
 ```mermaid
 flowchart LR
-  subgraph future ["Future"]
+  subgraph later ["Later"]
     P[prompts/]
-    L[llm/]
     T[tools/]
   end
 
   subgraph today ["Stage 0"]
+    L[llm/]
     ORCH[orchestration]
     BIZ[business]
     CON[contracts]
     PROV[providers]
   end
 
-  P --> L --> ORCH
+  P --> L
+  L --> ORCH
   ORCH --> BIZ --> CON
   ORCH <--> PROV
   T --> PROV
@@ -67,8 +68,12 @@ Nodes and the graph depend on **protocols**, not concrete backends.
 | `MetricsProvider` | Synthetic / stub | `PrometheusMetricsProvider` |
 | `ExecutionProvider` | Dry-run | `KubectlExecutionProvider` (allowlisted) |
 | `MemoryProvider` | No-op / local episode store | Extensible (e.g. vector store later) |
+| `LLMSuggestionProvider` | No-op | OpenAI-compatible / OpenRouter (`from_env()`) |
 
 Inject via `ProviderBundle` on `GRAPH.invoke(...)`. Business nodes read `Observations` and write partial state updates — they do not know whether logs came from JSONL or the API server.
+
+The LLM provider is advisory only. Ingestion rejects control-plane output.
+Routing and execution stay in deterministic code. See [LLM_BOUNDARY.md](LLM_BOUNDARY.md).
 
 ---
 
@@ -107,8 +112,8 @@ flowchart TD
 |-------|--------|
 | `enrich` | Attach provider-backed context to state |
 | `diagnose` | One-shot **scope** classification (OOM / config / app). Not re-run on replan |
-| `hypothesize` | Competing causes **inside that scope**, with normalized **prior belief** |
-| `collect_evidence` | Planned telemetry pulls |
+| `hypothesize` | Competing causes **inside that scope**, with normalized **prior belief**. May merge accepted LLM hypothesis candidates (0.05 prior), then renormalize |
+| `collect_evidence` | Planned telemetry pulls, plus accepted LLM evidence requests that pass ingestion |
 | `verify_hypotheses` | Live-stack posterior belief (`verification/engine.py`). Not the OOM metric loop |
 | `plan_fix` | Rank actions by heuristic suitability + safety |
 | `validate_fix` | Structural / policy checks on the plan |
@@ -214,6 +219,8 @@ Never write agent dumps under `src/`. See [runtime/README.md](../runtime/README.
 5. Recovery time (MTTR proxy)  
 
 Dataset-layer eval (`datasets/eval.py`) remains available for prediction JSONL vs ground truth. Prefer extending pure functions in `eval/` when improving autonomy metrics.
+
+LLM-assisted golden runs (`eval/compare_llm.py`) reuse the same 9-case freeze and add suggestion metrics: generated / accepted / rejected / useful evidence / unsafe. Diagnosis accuracy is not an LLM score — the model does not own diagnosis. See [baselines/README.md](baselines/README.md).
 
 ---
 

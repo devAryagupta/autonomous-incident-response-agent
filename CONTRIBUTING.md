@@ -192,8 +192,8 @@ Fix failures locally. Do **not** bypass hooks or commit secrets (`.env`, kubecon
 | Diagnose / hypothesize / plan / validate / score logic | Business packages (`nodes/`, `diagnosis/`, …) — **not** `graph.py` |
 | Graph edges, replan, pipeline order | `graph.py` / `pipeline.py` / `routing.py` |
 | Logs / events / metrics / execution / memory backends | `src/incident_agent/providers/` (or `execution/` for action handlers) |
-| Prompt templates | `prompts/` when created — never inline in business nodes long-term |
-| LLM client wrappers | `llm/` when created |
+| Prompt templates | `prompts/` when extracted — never inline in business nodes |
+| LLM client wrappers | `src/incident_agent/llm/` (advisory only) |
 | Kubectl / HTTP / cluster helpers | `tools/` when created, or keep behind providers |
 | Synthetic schemas / generators | `src/incident_agent/datasets/` |
 | Scorecard / trace metrics | `src/incident_agent/eval/` |

@@ -20,6 +20,13 @@ from incident_agent.contracts import (
 from incident_agent.datasets.core import load_jsonl
 from incident_agent.datasets.crashloopbackoff.schema import CrashLoopBackOffIncident
 from incident_agent.eval.failures import classify_golden_failure, failure_histogram
+from incident_agent.eval.llm_metrics import (
+    LLMRunTotals,
+    LLMStageSnapshot,
+    aggregate_llm_snapshots,
+    hypotheses_match,
+    snapshot_from_audit,
+)
 from incident_agent.eval.metrics import causes_match
 from incident_agent.nodes import (
     approve,
@@ -64,6 +71,7 @@ class GoldenRunRow:
     validation_result: str | None
     final_confidence: float | None
     failure_category: str | None = None
+    top_hypothesis_correct: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -141,6 +149,8 @@ class ReasoningPassSnapshot:
     selected_remediation: str | None
     confidence_score: float | None
     confidence_explanation: str | None
+    llm_hypothesize: LLMStageSnapshot | None = None
+    llm_collect_evidence: LLMStageSnapshot | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -163,6 +173,8 @@ class GoldenReasoningTrace:
     replan_count: int
     route: str | None
     reasoning_passes: list[ReasoningPassSnapshot]
+    top_hypothesis_correct: bool = False
+    llm_metrics: LLMRunTotals | None = None
 
 
 def _normalize_kind(value: str | None) -> str:
@@ -270,6 +282,7 @@ def row_from_run(incident: CrashLoopBackOffIncident, state: IncidentState) -> Go
         validation_result=_validation_result(state),
         final_confidence=_final_confidence(state),
         failure_category=failure_category,
+        top_hypothesis_correct=hypotheses_match(predicted_hyp, expected_hyp),
     )
 
 
@@ -423,12 +436,14 @@ def run_incident_with_reasoning_trace(
     pass_index = 0
     while True:
         pass_index += 1
-        _apply_updates(state, hypothesize(state))
+        _apply_updates(state, hypothesize(state, providers=bundle))
         initial_hypotheses = _hypothesis_snapshots(list(state.hypotheses))
+        llm_hypothesize = _llm_snapshot(state, "hypothesize")
 
         _apply_updates(state, collect_evidence(state, providers=bundle))
         evidence_requests = _request_snapshots(list(state.evidence_requests))
         evidence_results = _result_snapshots(list(state.evidence_results))
+        llm_collect_evidence = _llm_snapshot(state, "collect_evidence")
 
         _apply_updates(state, verify_hypotheses(state))
         verification_results = _verification_snapshots(list(state.hypothesis_verifications))
@@ -459,6 +474,8 @@ def run_incident_with_reasoning_trace(
                 confidence_explanation=(
                     state.confidence.explanation if state.confidence is not None else None
                 ),
+                llm_hypothesize=llm_hypothesize,
+                llm_collect_evidence=llm_collect_evidence,
             )
         )
 
@@ -501,8 +518,26 @@ def run_incident_with_reasoning_trace(
         replan_count=state.replan_count,
         route=state.route,
         reasoning_passes=passes,
+        top_hypothesis_correct=row.top_hypothesis_correct,
+        llm_metrics=_trace_llm_totals(passes),
     )
     return state, trace
+
+
+def _llm_snapshot(state: IncidentState, stage: str) -> LLMStageSnapshot:
+    audit = state.observations.extra.get("llm_ingestion")
+    payload = audit.get(stage) if isinstance(audit, dict) else None
+    return snapshot_from_audit(payload if isinstance(payload, dict) else None, stage=stage)
+
+
+def _trace_llm_totals(passes: list[ReasoningPassSnapshot]) -> LLMRunTotals:
+    snapshots: list[LLMStageSnapshot] = []
+    for item in passes:
+        if item.llm_hypothesize is not None:
+            snapshots.append(item.llm_hypothesize)
+        if item.llm_collect_evidence is not None:
+            snapshots.append(item.llm_collect_evidence)
+    return aggregate_llm_snapshots(snapshots)
 
 
 def run_golden_dataset(
@@ -584,10 +619,21 @@ def main(argv: list[str] | None = None) -> int:
         default="artifacts/benchmarks/golden_stage0_trace.json",
         help="Where to write full reasoning trace JSON",
     )
+    ap.add_argument(
+        "--llm-from-env",
+        action="store_true",
+        help="Use OpenAILLMSuggestionProvider.from_env() instead of the no-op LLM",
+    )
     args = ap.parse_args(argv)
 
     incidents = load_jsonl(CrashLoopBackOffIncident, args.dataset, strict=True)
-    rows, traces = run_golden_dataset_with_reasoning(incidents)
+    providers = None
+    if args.llm_from_env:
+        from incident_agent.llm import OpenAILLMSuggestionProvider
+        from incident_agent.providers import default_providers
+
+        providers = default_providers(llm=OpenAILLMSuggestionProvider.from_env())
+    rows, traces = run_golden_dataset_with_reasoning(incidents, providers=providers)
 
     out_json = Path(args.out_json)
     out_csv = Path(args.out_csv) if args.out_csv else None
@@ -597,10 +643,27 @@ def main(argv: list[str] | None = None) -> int:
 
     n = len(rows)
     diag_ok = sum(1 for r in rows if r.diagnosis_correct)
+    hyp_ok = sum(1 for r in rows if r.top_hypothesis_correct)
     fix_ok = sum(1 for r in rows if r.fix_correct)
     print(f"Ran {n} incidents from {args.dataset}")
-    print(f"diagnosis_correct: {diag_ok}/{n}")
-    print(f"fix_correct:       {fix_ok}/{n}")
+    print(f"diagnosis_correct:     {diag_ok}/{n}")
+    print(f"top_hypothesis_correct:{hyp_ok}/{n}")
+    print(f"fix_correct:           {fix_ok}/{n}")
+    if traces and traces[0].llm_metrics is not None:
+        totals = aggregate_llm_snapshots(
+            [
+                snap
+                for trace in traces
+                for pass_item in trace.reasoning_passes
+                for snap in (pass_item.llm_hypothesize, pass_item.llm_collect_evidence)
+                if snap is not None
+            ]
+        )
+        print(f"llm_generated:         {totals.suggestions_generated}")
+        print(f"llm_accepted:          {totals.suggestions_accepted}")
+        print(f"llm_rejected:          {totals.suggestions_rejected}")
+        print(f"llm_useful_evidence:   {totals.useful_evidence_requests}")
+        print(f"llm_unsafe:            {totals.unsafe_control_suggestions}")
     histogram = failure_histogram([r.failure_category for r in rows])
     if histogram:
         print("Failures by stage:")

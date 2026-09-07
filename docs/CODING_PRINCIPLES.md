@@ -45,8 +45,8 @@ prompts  →  llm  →  orchestration  →  business  →  contracts
 | `orchestration/` (today: `graph.py`, `pipeline.py`, `routing.py`) | Graph edges, replan loop, pipeline sequencing | Root-cause heuristics, prompt templates |
 | `providers/` | Observation / Metrics / Execution / Memory adapters | Scoring formulas, hypothesis catalogs |
 | `tools/` *(future)* | Kubectl, HTTP, cluster helpers as callable tools | Business scoring or graph topology |
-| `llm/` *(future)* | Model clients, token / retry wrappers | Domain “what is the root cause?” logic |
-| `prompts/` *(future)* | Prompt templates / message builders only | `invoke()`, API keys, domain algorithms |
+| `llm/` | Suggestion clients + ingestion gate | Domain “what is the root cause?” logic, routing, execution |
+| `prompts/` *(later)* | Prompt templates / message builders only | `invoke()`, API keys, domain algorithms |
 | `datasets/` | Synthetic schemas, generators, eval metrics | Live cluster I/O |
 | `cli/` *(target)* | Entry points (run, benchmark, generate) | Deep business logic |
 
@@ -60,9 +60,11 @@ prompts  →  llm  →  orchestration  →  business  →  contracts
 | Validation rules | `src/incident_agent/validation/` |
 | Orchestration | `graph.py`, `pipeline.py`, `routing.py` |
 | Providers | `src/incident_agent/providers/` |
+| LLM | `src/incident_agent/llm/` |
+| Eval | `src/incident_agent/eval/` |
 | Datasets | `src/incident_agent/datasets/` |
 
-When adding LLM / tools / prompts, create the dedicated packages — do **not** drop prompt strings into `nodes/` or business logic into `graph.py`.
+Keep prompt strings and HTTP clients out of `nodes/`. Keep domain scoring out of `llm/`.
 
 ---
 

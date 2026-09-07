@@ -7,8 +7,10 @@ Welcome. Start with the root [README.md](../README.md) — it is written so a ne
 | [../README.md](../README.md) | Everyone | 2-minute overview, diagrams, status, quickstart |
 | [../CONTRIBUTING.md](../CONTRIBUTING.md) | Contributors | Five contribution paths, setup, PR checklist |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Contributors | Layers, providers, workflow depth |
+| [LLM_BOUNDARY.md](LLM_BOUNDARY.md) | Contributors | Advisory-only LLM contract boundary |
 | [SCORE_SEMANTICS.md](SCORE_SEMANTICS.md) | Contributors | Belief vs suitability vs gate score |
 | [STATUS.md](STATUS.md) | Everyone | Shipped vs planned (transparent) |
+| [baselines/README.md](baselines/README.md) | Contributors | Frozen baseline + Qwen/Gemma compare scorecards |
 | [CODING_PRINCIPLES.md](CODING_PRINCIPLES.md) | Contributors | Naming, SoC, size limits, anti-patterns |
 | [../runtime/README.md](../runtime/README.md) | Contributors | Runtime data layout (outside `src/`) |
 | [../src/incident_agent/datasets/crashloopbackoff/README.md](../src/incident_agent/datasets/crashloopbackoff/README.md) | Scenario authors | CrashLoop schema, generate CLI, how to extend |

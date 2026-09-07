@@ -14,8 +14,8 @@
 |---|---|
 | **Problem** | SRE teams drown in CrashLoopBackOff and similar alerts. Manual triage is slow; naive automation is unsafe. |
 | **What this is** | A LangGraph-orchestrated agent with a **deterministic reasoning core**, **provider adapters** (synthetic / K8s / Prometheus), **confidence calibration**, and an **allowlisted execution policy**. |
-| **Stage today** | **Stage 0** — reproducible synthetic CrashLoopBackOff eval, full diagnose→plan→gate→execute lifecycle, opt-in live K8s/Prometheus. Not a production on-call bot yet. |
-| **Design bet** | Prove contracts, metrics, and safety gates **before** LLM-heavy reasoning. Business logic stays testable without API keys or a cluster. |
+| **Stage today** | **Stage 0 close** — deterministic CrashLoop eval is frozen; advisory LLM is measured against that freeze. Not a production on-call bot. |
+| **Design bet** | Prove contracts, metrics, and safety gates **before** the model can suggest anything. The LLM may advise; it may not route, approve, or mutate. |
 | **How you help** | Add scenarios, review SRE workflows, simulate K8s failures, improve eval metrics, harden remediation safety. → [CONTRIBUTING.md](CONTRIBUTING.md) |
 
 ```text
@@ -68,7 +68,9 @@ If you care about **trustworthy automation for SRE**, this is the foundation we 
 | Live K8s observations | **Done (opt-in)** | `KubernetesObservationProvider` |
 | Live Prometheus metrics | **Done (opt-in)** | `PrometheusMetricsProvider` |
 | Multi-dimensional eval scorecard | **Done** | Diagnosis · efficiency · calibration · remediation safety · MTTR |
-| LLM / prompt layer | **Planned** | Dedicated `llm/` + `prompts/` packages (not inline in nodes) |
+| Deterministic 9-case baseline | **Frozen** | [docs/baselines/2026-09-07.md](docs/baselines/2026-09-07.md) — diagnosis 9/9, top hyp 7/9, fix 5/9 |
+| Advisory LLM boundary | **Done (opt-in)** | Suggest hypotheses/evidence only; ingestion rejects control-plane output. CI stays no-op. |
+| LLM vs baseline compare | **Done** | Qwen and Gemma: diagnosis stayed 9/9; fix 5/9 → 2/9; unsafe accepted 0. See [baselines](docs/baselines/README.md). |
 | Additional incident classes (OOM, ImagePull, network) | **Open** | CrashLoop is first; community scenarios welcome |
 | Production on-call deployment | **Not yet** | Stage 0 is research + eval scaffolding |
 
@@ -104,6 +106,7 @@ flowchart TB
     M[MetricsProvider]
     X[ExecutionProvider]
     Mem[MemoryProvider]
+    LLM[LLMSuggestionProvider]
   end
 
   subgraph outside ["Outside src/"]
@@ -122,6 +125,7 @@ flowchart TB
   G --> M
   G --> X
   G --> Mem
+  G --> LLM
   O --> RT
   Mem --> RT
 ```
@@ -131,8 +135,9 @@ flowchart TB
 | Contracts | `src/incident_agent/contracts/` | Typed state only |
 | Business | `nodes/`, `diagnosis/`, `hypothesis/`, `remediation/`, `validation/`, `verification/`, `calibration/`, `execution/` | Domain decisions |
 | Orchestration | `graph.py`, `pipeline.py`, `routing.py` | Sequencing and replan |
-| Providers | `src/incident_agent/providers/` | Observation / Metrics / Execution / Memory backends |
-| Datasets & eval | `datasets/`, `eval/`, `benchmark.py` | Synthetic data + scorecards |
+| Providers | `src/incident_agent/providers/` | Observation / Metrics / Execution / Memory / LLM backends |
+| LLM | `src/incident_agent/llm/` | Advisory suggestions only; ingestion gate before business use |
+| Datasets & eval | `datasets/`, `eval/`, `benchmark.py` | Synthetic data, baseline freeze, LLM compare |
 | Runtime data | `runtime/`, `data/`, `artifacts/` | Never under `src/` |
 
 Full rules: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) · [docs/CODING_PRINCIPLES.md](docs/CODING_PRINCIPLES.md).
@@ -220,6 +225,41 @@ python -m incident_agent.benchmark \
 
 Baselines: `oracle` (sanity / 1.0 category accuracy) · `empty` (lower bound) · `heuristic` (keyword matcher).
 
+### Freeze today's deterministic baseline
+
+```bash
+export PYTHONPATH=./src   # Windows PowerShell: $env:PYTHONPATH=(Resolve-Path .\src).Path
+python -m incident_agent.eval.freeze_baseline --label 2026-09-07
+```
+
+This writes run artifacts under `artifacts/baselines/<label>/` plus a
+commit-friendly snapshot under `docs/baselines/<label>.json` and
+`docs/baselines/<label>.md`. Frozen Stage-0 numbers:
+diagnosis **9/9**, top hypothesis **7/9**, fix **5/9**.
+
+### Optional: advisory LLM compare
+
+Stage-0 defaults stay deterministic (`NoopLLMSuggestionProvider`). With
+`OPENROUTER_API_KEY` in `.env`, compare the same 9 incidents against the
+freeze. Catalog IDs change; pin the model for the run, do not treat “free”
+as stable.
+
+```bash
+python -m incident_agent.eval.compare_llm --baseline docs/baselines/2026-09-07.json --label YYYY-MM-DD-qwen
+python -m incident_agent.eval.compare_llm --model google/gemma-3-27b-it --label YYYY-MM-DD-gemma
+```
+
+```python
+from incident_agent.llm import OpenAILLMSuggestionProvider
+from incident_agent.providers import default_providers
+
+bundle = default_providers(llm=OpenAILLMSuggestionProvider.from_env())
+```
+
+The LLM may only suggest hypotheses or evidence. Routing and execution stay
+deterministic. On API failure the provider returns no suggestions.
+Boundary and measured results: [docs/LLM_BOUNDARY.md](docs/LLM_BOUNDARY.md).
+
 ### Optional: live Kubernetes observations
 
 ```bash
@@ -263,6 +303,8 @@ Read **[CONTRIBUTING.md](CONTRIBUTING.md)** before opening a PR. Architecture PR
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Setup, contribution paths, PR checklist |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Layers, providers, workflow depth |
 | [docs/STATUS.md](docs/STATUS.md) | What’s shipped vs planned |
+| [docs/LLM_BOUNDARY.md](docs/LLM_BOUNDARY.md) | Suggest-not-control rule + measured LLM compares |
+| [docs/baselines/README.md](docs/baselines/README.md) | Frozen baseline and Qwen/Gemma scorecards |
 | [docs/CODING_PRINCIPLES.md](docs/CODING_PRINCIPLES.md) | Naming, size limits, SoC rules |
 | [docs/README.md](docs/README.md) | Full docs index |
 | [runtime/README.md](runtime/README.md) | Where runtime data lives |
