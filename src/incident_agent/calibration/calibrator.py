@@ -4,7 +4,7 @@ Autonomous execution must depend on calibrated confidence, not raw Bayesian
 posteriors. This module is pure (no I/O, no graph node side effects).
 """
 
-from __future__ import annotations # it is used to make the use of the features of the future version of python
+from __future__ import annotations
 
 from incident_agent.calibration.models import CalibratedAssessment, PredictionOutcome
 
